@@ -180,7 +180,7 @@ func runChat(cmd *cobra.Command, args []string) {
 		skills := skillsLoader.List()
 		systemPrompt := contextBuilder.BuildSystemPrompt(skills)
 		fmt.Println(systemPrompt)
-		fmt.Println("=== End of System Prompt ===\n")
+		fmt.Println("=== End of System Prompt ===")
 	}
 
 	for {
