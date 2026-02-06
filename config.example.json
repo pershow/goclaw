@@ -24,6 +24,20 @@
       "app_secret": "",
       "encrypt_key": "",
       "verification_token": ""
+    },
+    "qq": {
+      "enabled": false,
+      "ws_url": "",
+      "access_token": "",
+      "allowed_ids": []
+    },
+    "wework": {
+      "enabled": false,
+      "corp_id": "",
+      "agent_id": "",
+      "secret": "",
+      "token": "",
+      "encoding_aes_key": ""
     }
   },
   "providers": {
