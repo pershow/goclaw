@@ -249,7 +249,20 @@ func runStart(cmd *cobra.Command, args []string) {
 	defer scheduler.Stop()
 
 	// 启动出站消息分发
-	go channelMgr.DispatchOutbound(ctx)
+	logger.Info("About to start outbound message dispatcher")
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error("Outbound message dispatcher panicked",
+					zap.Any("panic", r))
+			}
+		}()
+		if err := channelMgr.DispatchOutbound(ctx); err != nil {
+			logger.Error("Outbound message dispatcher exited with error", zap.Error(err))
+		} else {
+			logger.Info("Outbound message dispatcher exited normally")
+		}
+	}()
 
 	// 启动 Agent
 	go func() {

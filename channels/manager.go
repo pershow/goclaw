@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/smallnest/dogclaw/goclaw/bus"
 	"github.com/smallnest/dogclaw/goclaw/config"
@@ -123,15 +124,47 @@ func (m *Manager) Status(name string) (map[string]interface{}, error) {
 
 // DispatchOutbound 分发出站消息
 func (m *Manager) DispatchOutbound(ctx context.Context) error {
+	logger.Info(">>> Starting outbound message dispatcher <<<")
+	defer logger.Info(">>> Outbound dispatcher exited <<<")
+
+	// 订阅出站消息
+	subscription := m.bus.SubscribeOutbound()
+	defer subscription.Unsubscribe()
+
+	logger.Info("Subscribed to outbound messages",
+		zap.String("subscription_id", subscription.ID))
+
+	busChan := subscription.Channel
+
+	// 定期心跳日志
+	heartbeat := time.NewTicker(30 * time.Second)
+	defer heartbeat.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
+			logger.Info("Outbound dispatcher stopped by context")
 			return ctx.Err()
-		default:
-			msg, err := m.bus.ConsumeOutbound(ctx)
-			if err != nil {
+		case <-heartbeat.C:
+			logger.Info("Outbound dispatcher heartbeat - waiting for messages...",
+				zap.Int("outbound_queue_size", m.bus.OutboundCount()))
+		case msg, ok := <-busChan:
+			logger.Info("Outbound dispatcher: got message from channel",
+				zap.Bool("ok", ok),
+				zap.Bool("msg_nil", msg == nil))
+			if !ok {
+				logger.Warn("Outbound channel closed, exiting dispatcher")
+				return nil
+			}
+			if msg == nil {
+				logger.Warn("Received nil message, continuing")
 				continue
 			}
+
+			logger.Info("Outbound message received",
+				zap.String("channel", msg.Channel),
+				zap.String("chat_id", msg.ChatID),
+				zap.Int("content_length", len(msg.Content)))
 
 			// 查找对应的通道
 			channel, ok := m.Get(msg.Channel)
@@ -148,6 +181,10 @@ func (m *Manager) DispatchOutbound(ctx context.Context) error {
 					zap.String("channel", msg.Channel),
 					zap.Error(err),
 				)
+			} else {
+				logger.Info("Message sent successfully via channel",
+					zap.String("channel", msg.Channel),
+					zap.String("chat_id", msg.ChatID))
 			}
 		}
 	}

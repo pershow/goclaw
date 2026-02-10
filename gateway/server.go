@@ -117,7 +117,7 @@ func (s *Server) Start(ctx context.Context) error {
 		return err
 	}
 
-	// 启动出站消息广播
+	// 启动出站消息广播（使用新的订阅机制）
 	go s.broadcastOutbound(ctx)
 
 	// 监听上下文取消
@@ -495,19 +495,33 @@ func (s *Server) handleWebSocketMessages(conn *Connection) {
 
 // broadcastOutbound 广播出站消息到所有 WebSocket 连接
 func (s *Server) broadcastOutbound(ctx context.Context) {
+	logger.Info("Starting WebSocket outbound broadcaster")
+
+	// 订阅出站消息
+	subscription := s.bus.SubscribeOutbound()
+	defer subscription.Unsubscribe()
+
+	logger.Info("WebSocket broadcaster subscribed",
+		zap.String("subscription_id", subscription.ID))
+
+	busChan := subscription.Channel
+
 	for {
 		select {
 		case <-ctx.Done():
+			logger.Info("WebSocket outbound broadcaster stopped")
 			return
-		default:
-			msg, err := s.bus.ConsumeOutbound(ctx)
-			if err != nil {
-				if err == context.DeadlineExceeded || err == context.Canceled {
-					continue
-				}
-				logger.Error("Failed to consume outbound message", zap.Error(err))
+		case msg, ok := <-busChan:
+			if !ok {
+				logger.Info("Outbound channel closed, exiting broadcaster")
+				return
+			}
+			if msg == nil {
 				continue
 			}
+
+			logger.Debug("Broadcasting to WebSocket connections",
+				zap.Int("connections", len(s.connections)))
 
 			// 广播到所有连接
 			s.connectionsMu.RLock()

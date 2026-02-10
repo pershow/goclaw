@@ -300,8 +300,12 @@ func (r *Reflector) ShouldContinueIteration(reflection *TaskReflection, currentI
 		return false
 	}
 
-	// 高置信度已完成，停止
-	if reflection.Status == TaskStatusCompleted && reflection.Confidence >= r.config.MinConfidence {
+	// 如果已经执行了足够多次迭代（比如5次），就强制停止
+	// 避免简单任务因为 reflection 过于保守而无限循环
+	if currentIteration >= 5 && reflection.Status == TaskStatusInProgress {
+		logger.Warn("Forcing completion after multiple in-progress reflections",
+			zap.Int("iteration", currentIteration),
+			zap.String("reasoning", reflection.Reasoning))
 		return false
 	}
 

@@ -159,7 +159,18 @@ func (l *Loop) processMessage(ctx context.Context, msg *bus.InboundMessage) {
 	})
 
 	// 运行 Agent 迭代（带重试）
+	logger.Info("Running agent iteration with retry",
+		zap.String("user_request", msg.Content))
 	response, err := l.runIterationWithRetry(ctx, sess, msg.Content)
+	logger.Info("Agent iteration returned",
+		zap.String("response_preview", func() string {
+			if len(response) > 100 {
+				return response[:100] + "..."
+			}
+			return response
+		}()),
+		zap.Int("response_length", len(response)),
+		zap.Error(err))
 	if err != nil {
 		logger.Error("Agent iteration failed", zap.Error(err))
 
@@ -185,12 +196,21 @@ func (l *Loop) processMessage(ctx context.Context, msg *bus.InboundMessage) {
 	}
 
 	// 发送响应
-	_ = l.bus.PublishOutbound(ctx, &bus.OutboundMessage{
+	logger.Info("Publishing outbound message",
+		zap.String("channel", msg.Channel),
+		zap.String("chat_id", msg.ChatID),
+		zap.Int("content_length", len(response)))
+	err = l.bus.PublishOutbound(ctx, &bus.OutboundMessage{
 		Channel:   msg.Channel,
 		ChatID:    msg.ChatID,
 		Content:   response,
 		Timestamp: time.Now(),
 	})
+	if err != nil {
+		logger.Error("Failed to publish outbound message", zap.Error(err))
+	} else {
+		logger.Info("Outbound message published to bus successfully")
+	}
 
 	// 添加助手响应到会话
 	sess.AddMessage(session.Message{
@@ -496,6 +516,9 @@ func (l *Loop) runIteration(ctx context.Context, sess *session.Session, userRequ
 		logger.Warn("Agent reached max iterations", zap.Int("max", l.maxIteration))
 	}
 
+	logger.Info("runIteration returning",
+		zap.Int("iteration", iteration),
+		zap.Int("response_length", len(lastResponse)))
 	return lastResponse, nil
 }
 
