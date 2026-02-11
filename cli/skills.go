@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/smallnest/dogclaw/goclaw/agent"
-	"github.com/smallnest/dogclaw/goclaw/config"
-	"github.com/smallnest/dogclaw/goclaw/internal/logger"
-	"github.com/smallnest/dogclaw/goclaw/providers"
+	"github.com/smallnest/goclaw//agent"
+	"github.com/smallnest/goclaw//config"
+	"github.com/smallnest/goclaw//internal/logger"
+	"github.com/smallnest/goclaw//providers"
 	"github.com/spf13/cobra"
 )
 

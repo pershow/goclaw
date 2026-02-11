@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/smallnest/dogclaw/goclaw/config"
-	"github.com/smallnest/dogclaw/goclaw/cron"
+	"github.com/smallnest/goclaw//config"
+	"github.com/smallnest/goclaw//cron"
 	"github.com/spf13/cobra"
 )
 

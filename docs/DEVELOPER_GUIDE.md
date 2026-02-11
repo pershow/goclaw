@@ -30,7 +30,7 @@ git clone https://github.com/YOUR_USERNAME/goclaw.git
 cd goclaw
 
 # Add upstream remote
-git remote add upstream https://github.com/smallnest/dogclaw/goclaw.git
+git remote add upstream https://github.com/smallnest/goclaw/.git
 ```
 
 ## Development Setup

@@ -10,7 +10,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/smallnest/dogclaw/goclaw/session"
+	"github.com/smallnest/goclaw//session"
 	"github.com/spf13/cobra"
 )
 

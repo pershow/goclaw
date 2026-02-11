@@ -152,7 +152,7 @@ install:
 ## docs: Generate documentation
 docs:
 	@echo "$(COLOR_BLUE)Generating documentation...$(COLOR_RESET)"
-	@echo "Open http://localhost:6060/pkg/github.com/smallnest/dogclaw/goclaw/ in your browser"
+	@echo "Open http://localhost:6060/pkg/github.com/smallnest/goclaw// in your browser"
 	godoc -http=:6060
 
 ## ci: Run continuous integration checks
@@ -178,7 +178,7 @@ version:
 info:
 	@echo "$(COLOR_BOLD)Project Information$(COLOR_RESET)"
 	@echo "  Name: GoClaw"
-	@echo "  Module: github.com/smallnest/dogclaw/goclaw"
+	@echo "  Module: github.com/smallnest/goclaw/"
 	@echo "  Go Version: $$($(GOCMD) version | cut -d' ' -f3)"
 	@echo "  Version: $(VERSION)"
 	@echo "  Packages: $$(find . -name '*.go' -not -path './vendor/*' | xargs dirname | sort -u | wc -l | tr -d ' ')"

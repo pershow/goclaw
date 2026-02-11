@@ -13,7 +13,7 @@ import (
 
 	"github.com/chzyer/readline"
 	"github.com/manifoldco/promptui"
-	"github.com/smallnest/dogclaw/goclaw/session"
+	"github.com/smallnest/goclaw//session"
 )
 
 // SpecialMarker 是用于触发菜单选择的特殊标记

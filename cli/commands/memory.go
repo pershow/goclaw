@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/smallnest/dogclaw/goclaw/config"
-	"github.com/smallnest/dogclaw/goclaw/memory"
+	"github.com/smallnest/goclaw//config"
+	"github.com/smallnest/goclaw//memory"
 	"github.com/spf13/cobra"
 )
 

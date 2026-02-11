@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/smallnest/dogclaw/goclaw/bus"
-	"github.com/smallnest/dogclaw/goclaw/config"
-	"github.com/smallnest/dogclaw/goclaw/gateway"
+	"github.com/smallnest/goclaw//bus"
+	"github.com/smallnest/goclaw//config"
+	"github.com/smallnest/goclaw//gateway"
 	"github.com/spf13/cobra"
 )
 

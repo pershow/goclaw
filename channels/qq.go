@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/smallnest/dogclaw/goclaw/bus"
-	"github.com/smallnest/dogclaw/goclaw/config"
-	"github.com/smallnest/dogclaw/goclaw/internal/logger"
+	"github.com/smallnest/goclaw//bus"
+	"github.com/smallnest/goclaw//config"
+	"github.com/smallnest/goclaw//internal/logger"
 	"github.com/tencent-connect/botgo"
 	"github.com/tencent-connect/botgo/dto"
 	"github.com/tencent-connect/botgo/log"

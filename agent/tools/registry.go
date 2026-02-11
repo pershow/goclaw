@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/smallnest/dogclaw/goclaw/internal/logger"
+	"github.com/smallnest/goclaw//internal/logger"
 	"go.uber.org/zap"
 )
 

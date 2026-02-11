@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/smallnest/dogclaw/goclaw/internal/logger"
-	"github.com/smallnest/dogclaw/goclaw/session"
+	"github.com/smallnest/goclaw//internal/logger"
+	"github.com/smallnest/goclaw//session"
 	"go.uber.org/zap"
 )
 

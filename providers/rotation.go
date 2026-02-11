@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/smallnest/dogclaw/goclaw/types"
+	"github.com/smallnest/goclaw//types"
 )
 
 // RotationStrategy 轮换策略

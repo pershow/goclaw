@@ -8,7 +8,7 @@ import (
 	"sort"
 	"text/tabwriter"
 
-	"github.com/smallnest/dogclaw/goclaw/config"
+	"github.com/smallnest/goclaw//config"
 	"github.com/spf13/cobra"
 )
 

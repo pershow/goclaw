@@ -16,12 +16,12 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/smallnest/dogclaw/goclaw/bus"
-	"github.com/smallnest/dogclaw/goclaw/channels"
-	"github.com/smallnest/dogclaw/goclaw/config"
-	"github.com/smallnest/dogclaw/goclaw/gateway"
-	"github.com/smallnest/dogclaw/goclaw/internal/logger"
-	"github.com/smallnest/dogclaw/goclaw/session"
+	"github.com/smallnest/goclaw//bus"
+	"github.com/smallnest/goclaw//channels"
+	"github.com/smallnest/goclaw//config"
+	"github.com/smallnest/goclaw//gateway"
+	"github.com/smallnest/goclaw//internal/logger"
+	"github.com/smallnest/goclaw//session"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 )

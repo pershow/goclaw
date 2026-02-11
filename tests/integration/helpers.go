@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/smallnest/dogclaw/goclaw/bus"
-	"github.com/smallnest/dogclaw/goclaw/channels"
-	"github.com/smallnest/dogclaw/goclaw/config"
-	"github.com/smallnest/dogclaw/goclaw/gateway"
-	"github.com/smallnest/dogclaw/goclaw/session"
+	"github.com/smallnest/goclaw//bus"
+	"github.com/smallnest/goclaw//channels"
+	"github.com/smallnest/goclaw//config"
+	"github.com/smallnest/goclaw//gateway"
+	"github.com/smallnest/goclaw//session"
 )
 
 // SetupTestGateway creates a test gateway server with all dependencies

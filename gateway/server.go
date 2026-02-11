@@ -12,11 +12,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-	"github.com/smallnest/dogclaw/goclaw/bus"
-	"github.com/smallnest/dogclaw/goclaw/channels"
-	"github.com/smallnest/dogclaw/goclaw/config"
-	"github.com/smallnest/dogclaw/goclaw/internal/logger"
-	"github.com/smallnest/dogclaw/goclaw/session"
+	"github.com/smallnest/goclaw//bus"
+	"github.com/smallnest/goclaw//channels"
+	"github.com/smallnest/goclaw//config"
+	"github.com/smallnest/goclaw//internal/logger"
+	"github.com/smallnest/goclaw//session"
 	"go.uber.org/zap"
 )
 
