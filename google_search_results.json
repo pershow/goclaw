@@ -1,60 +1,56 @@
 {
-  "query": "北京当前天气",
+  "query": "twitter top 10 trending AI tweets",
   "total_results": 10,
   "results": [
     {
-      "title": "搜索结果 ·中国北京市",
-      "link": "#"
+      "title": "Trending tweets about ai",
+      "link": "https://tweethunter.io/trending/ai",
+      "description": "Explore this list of thetrending tweetsrelated toaiin the last 30 days. Check them out to know what's hot right now.",
+      "site_name": "Tweet Hunter"
     },
     {
-      "title": "10日（今天）",
-      "link": "https://www.weather.com.cn/weather/101010100.shtml",
-      "description": "今天降温主要区域将转移至江南中东部、华南等地，中东部其余大部地区气温将开启回升。今天雨雪范围明显缩小，明天起大部地区将迎来降水间歇期。",
-      "site_name": "天气网"
+      "title": "How Much Does Twitter Pay for 1 Million Views in 2026?",
+      "link": "https://stackinfluence.com/how-much-twitter-pay-for-1-million-views-2026/",
+      "site_name": "Stack Influence"
     },
     {
-      "title": "北京旅游必去的20大景点，中国人都想去，首都旅行最全攻略",
-      "link": "https://www.visitbeijing.com.cn/article/47QqC4Np2ua",
-      "site_name": "北京旅游网"
+      "title": "Who is the most famous AI influencer?The 10 best virtual influencers",
+      "link": "https://www.kolsquare.com/en/top-influencers/10-ai-influencers-transforming-social-media",
+      "site_name": "Kolsquare"
     },
     {
-      "title": "北京的天气如何？ - 中央文化和旅游管理干部学院",
-      "link": "https://cacta.cn/detail_question.aspx?isfaq=1&questionid=1",
-      "site_name": "中央文化和旅游管理干部学院"
+      "title": "X/Twitter accounts with the most followers: The top 10",
+      "link": "https://www.epidemicsound.com/blog/most-followed-on-x-twitter/",
+      "site_name": "Epidemic Sound"
     },
     {
-      "title": "首都气候– 北京 - 中国天气网",
-      "link": "https://bj.weather.com.cn/sdqh/index.shtml",
-      "site_name": "北京 - 中国天气网"
+      "title": "15 Best Artificial Intelligence Twitter Accounts to Follow",
+      "link": "https://www.zyratalk.com/blog/15-Best-Artificial-Intelligence-Twitter-Accounts-to-Follow",
+      "site_name": "ZyraTalk"
     },
     {
-      "title": "北京供暖最新消息！11月7日多区供暖点火试运行！",
-      "link": "https://www.beijing.gov.cn/fuwu/bmfw/bmzt/2023gn/zx/202511/t20251104_4254118.html",
-      "site_name": "北京市人民政府"
+      "title": "I Built a Twitter AI Agent That Auto Posts Trending Tweets for ...YouTube·Helyz Space2025年10月20日",
+      "link": "https://www.youtube.com/watch?v=s6dfQvzumc8"
     },
     {
-      "title": "北京-天气预报",
-      "link": "https://www.nmc.cn/publish/forecast/ABJ/beijing.html",
-      "description": "11:00 · 2.2℃. 2.3m/s. 西风. 1025.7hPa ; 14:00 · 3.2℃. 3.3m/s. 西南风. 1023.6hPa ; 17:00 · 4.3℃. 2.7m/s. 西南风. 1023.9hPa.",
-      "site_name": "中央气象台"
+      "title": "How I Got 15500 Twitter Followers in 4 Months Using AI (TOO ...YouTube·The AI Growth Lab with Tom2025年10月9日",
+      "link": "https://www.youtube.com/watch?v=oTa2RccMkJU"
     },
     {
-      "title": "Beijing, Beijing, China Weather Forecast",
-      "link": "https://www.accuweather.com/en/cn/beijing/101924/weather-forecast/101924",
-      "description": "Current Weather. 2:30 AM. 23°F. Clear. RealFeel® 27°. Beijing Weather Radar. Beijing Weather Radar. Static Radar Temporarily Unavailable. Thank you for your ...",
-      "site_name": "AccuWeather"
+      "title": "How I Automate Twitter/X With Claude AI (INSANE Results!)YouTube·Julian Goldie SEO1 个月前",
+      "link": "https://www.youtube.com/watch?v=MatkxRwNtxg"
     },
     {
-      "title": "Beijing, People's Republic Of China Weather Conditions",
-      "link": "https://www.wunderground.com/weather/cn/beijing",
-      "description": "Beijing, People's Republic of China Weather Conditionsstar_ratehome. icon18 °FBeijing Capital Intl Airport Station|Report.",
-      "site_name": "Weather Underground"
+      "title": "AI Tech Trends (@AiTechTrends) / Posts / X",
+      "link": "https://x.com/AiTechTrends",
+      "description": "AI Tech Trends(@AiTechTrends) - Posts - Artificial Intelligence social network #AI #branding #Technology | X (formerly Twitter)",
+      "site_name": "X · AiTechTrends"
     },
     {
-      "title": "【北京天气】北京40天天气预报,北京更长预报 ...",
-      "link": "https://www.weather.com.cn/weather40d/101010100.shtml",
-      "description": "今起三天，寒潮将给中东部带来明显降温，东北地区东部、江南东部降温可超12℃。降温的同时，今明天中东部还会迎来大范围雨雪天气。 2月4日 ...",
-      "site_name": "天气网"
+      "title": "The top 10 most useful AI tools of the week: (🧵 A thread)",
+      "link": "https://x.com/TheRundownAI/status/1650200870653509632",
+      "description": "The Rundown AI (@TheRundownAI). 36 replies.The top 10 most useful AI tools of the week: (   A thread)",
+      "site_name": "X · TheRundownAI"
     }
   ]
 }

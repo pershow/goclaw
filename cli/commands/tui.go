@@ -331,6 +331,12 @@ func runAgentIteration(
 		cmdRegistry.ResetStop()
 	}
 
+	// 创建失败追踪器
+	failureTracker := NewFailureTracker()
+
+	// 获取可用的工具名称列表（用于错误提示）
+	availableTools := getAvailableToolNames(toolRegistry)
+
 	// Get loaded skills
 	loadedSkills := getLoadedSkills(sess)
 
@@ -354,7 +360,24 @@ func runAgentIteration(
 
 		// Build messages
 		history := sess.GetHistory(tuiHistoryLimit)
-		messages := contextBuilder.BuildMessages(history, "", skills, loadedSkills)
+
+		// 检查是否需要添加错误处理指导
+		var errorGuidance string
+		if shouldUseErrorGuidance(history) {
+			failedTools := failureTracker.GetFailedToolNames()
+			errorGuidance = "\n\n## 重要提示\n\n"
+			errorGuidance += "检测到工具调用连续失败。请仔细分析错误原因，并尝试以下策略：\n"
+			errorGuidance += "1. 检查失败的工具是否使用了正确的参数\n"
+			errorGuidance += "2. 尝试使用其他可用的工具完成任务（参考上面的工具列表）\n"
+			errorGuidance += "3. 如果所有工具都无法完成任务，向用户说明情况\n"
+			if len(failedTools) > 0 {
+				errorGuidance += fmt.Sprintf("\n**失败的工具**: %s\n", strings.Join(failedTools, ", "))
+			}
+			logger.Info("Added error guidance due to consecutive failures",
+				zap.Strings("failed_tools", failedTools))
+		}
+
+		messages := contextBuilder.BuildMessages(history, errorGuidance, skills, loadedSkills)
 		providerMessages := make([]providers.Message, len(messages))
 		for i, msg := range messages {
 			var tcs []providers.ToolCall
@@ -427,7 +450,11 @@ func runAgentIteration(
 					logger.Error("Tool execution failed",
 						zap.String("tool", tc.Name),
 						zap.Error(err))
-					result = fmt.Sprintf("Error: %v", err)
+					failureTracker.RecordFailure(tc.Name)
+					// 使用增强的错误格式化
+					result = formatToolError(tc.Name, tc.Params, err, availableTools)
+				} else {
+					failureTracker.RecordSuccess(tc.Name)
 				}
 
 				// Check for use_skill
@@ -545,4 +572,151 @@ func findMostRecentTUISession(mgr *session.Manager) string {
 	})
 
 	return tuiSessions[0].key
+}
+
+// FailureTracker 追踪工具调用失败
+type FailureTracker struct {
+	toolFailures map[string]int  // tool_name -> failure count
+	totalCount   int
+}
+
+// NewFailureTracker 创建失败追踪器
+func NewFailureTracker() *FailureTracker {
+	return &FailureTracker{
+		toolFailures: make(map[string]int),
+		totalCount:   0,
+	}
+}
+
+// RecordFailure 记录工具失败
+func (ft *FailureTracker) RecordFailure(toolName string) {
+	ft.toolFailures[toolName]++
+	ft.totalCount++
+	logger.Debug("Tool failure recorded",
+		zap.String("tool", toolName),
+		zap.Int("count", ft.toolFailures[toolName]),
+		zap.Int("total", ft.totalCount))
+}
+
+// RecordSuccess 记录工具成功
+func (ft *FailureTracker) RecordSuccess(toolName string) {
+	// 同一工具成功后，可以重置其失败计数
+	if count, ok := ft.toolFailures[toolName]; ok && count > 0 {
+		ft.toolFailures[toolName] = 0
+	}
+}
+
+// HasConsecutiveFailures 检查是否有连续失败
+func (ft *FailureTracker) HasConsecutiveFailures(threshold int) bool {
+	return ft.totalCount >= threshold
+}
+
+// GetFailedToolNames 获取失败的工具名称列表
+func (ft *FailureTracker) GetFailedToolNames() []string {
+	var names []string
+	for name, count := range ft.toolFailures {
+		if count > 0 {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// formatToolError 格式化工具错误，提供替代建议
+func formatToolError(toolName string, params map[string]interface{}, err error, availableTools []string) string {
+	errorMsg := err.Error()
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("## 工具执行失败: `%s`\n\n", toolName))
+	sb.WriteString(fmt.Sprintf("**错误**: %s\n\n", errorMsg))
+
+	// 提供降级建议
+	var suggestions []string
+	switch toolName {
+	case "write_file":
+		suggestions = []string{
+			"1. **输出到控制台**: 直接将内容显示给用户",
+			"2. **使用相对路径**: 尝试使用 `./filename`",
+			"3. **使用完整路径**: 尝试使用绝对路径",
+			"4. **检查权限**: 确认当前目录有写入权限",
+		}
+	case "read_file":
+		suggestions = []string{
+			"1. **检查路径**: 确认文件路径是否正确",
+			"2. **列出目录**: 使用 `list_dir` 工具查看目录内容",
+			"3. **使用相对路径**: 尝试使用 `./filename`",
+		}
+	case "smart_search", "web_search":
+		suggestions = []string{
+			"1. **简化查询**: 使用更简单的关键词",
+			"2. **稍后重试**: 网络暂时不可用",
+			"3. **告知用户**: 让用户自己搜索并提供结果",
+		}
+	case "browser":
+		suggestions = []string{
+			"1. **检查URL**: 确认URL格式正确",
+			"2. **使用web_reader**: 尝试使用 web_reader 工具替代",
+		}
+	default:
+		suggestions = []string{
+			"1. **检查参数**: 确认工具参数是否正确",
+			"2. **尝试替代方案**: 使用其他工具或方法",
+		}
+	}
+
+	if len(suggestions) > 0 {
+		sb.WriteString("**建议的替代方案**:\n\n")
+		for _, s := range suggestions {
+			sb.WriteString(fmt.Sprintf("%s\n", s))
+		}
+	}
+
+	// 显示可用的替代工具
+	if len(availableTools) > 0 {
+		sb.WriteString("\n**可用的工具列表**:\n\n")
+		for _, tool := range availableTools {
+			if tool != toolName {
+				sb.WriteString(fmt.Sprintf("- %s\n", tool))
+			}
+		}
+	}
+
+	return sb.String()
+}
+
+// shouldUseErrorGuidance 判断是否需要添加错误处理指导
+func shouldUseErrorGuidance(history []session.Message) bool {
+	// 检查最近的消息中是否有工具失败
+	if len(history) == 0 {
+		return false
+	}
+
+	consecutiveFailures := 0
+	for i := len(history) - 1; i >= 0 && i >= len(history)-6; i-- {
+		msg := history[i]
+		if msg.Role == "tool" {
+			if strings.Contains(msg.Content, "## 工具执行失败") ||
+				strings.Contains(msg.Content, "Error:") {
+				consecutiveFailures++
+			} else {
+				break // 遇到成功的工具调用就停止
+			}
+		}
+	}
+
+	return consecutiveFailures >= 2
+}
+
+// getAvailableToolNames 获取可用的工具名称列表
+func getAvailableToolNames(toolRegistry *tools.Registry) []string {
+	if toolRegistry == nil {
+		return []string{}
+	}
+
+	tools := toolRegistry.List()
+	names := make([]string, 0, len(tools))
+	for _, t := range tools {
+		names = append(names, t.Name())
+	}
+	return names
 }
