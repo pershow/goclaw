@@ -85,6 +85,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 				Parts: []llms.ContentPart{
 					llms.ToolCallResponse{
 						ToolCallID: msg.ToolCallID,
+						Name:       msg.ToolName,
 						Content:    msg.Content,
 					},
 				},

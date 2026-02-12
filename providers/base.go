@@ -12,6 +12,7 @@ type Message struct {
 	Content    string     `json:"content"`
 	Images     []string   `json:"images,omitempty"`       // Image URLs or Base64
 	ToolCallID string     `json:"tool_call_id,omitempty"` // For tool role
+	ToolName  string     `json:"tool_name,omitempty"`  // For tool role - the name of the tool that was called
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`   // For assistant role
 }
 

@@ -606,11 +606,20 @@ func (b *ContextBuilder) loadBootstrapFiles() string {
 
 // validateHistoryMessages 验证历史消息，过滤掉孤立的 tool 消息
 // 每个 tool 消息必须有一个前置的 assistant 消息，且该消息包含对应的 tool_calls
+// 此外，过滤掉没有 tool_name 的旧 tool 消息（向后兼容）
 func (b *ContextBuilder) validateHistoryMessages(history []session.Message) []session.Message {
 	var valid []session.Message
 
 	for i, msg := range history {
 		if msg.Role == "tool" {
+			// Skip old tool result messages without tool_name (backward compatibility)
+			if _, ok := msg.Metadata["tool_name"].(string); !ok {
+				logger.Warn("Skipping old tool result message without tool_name",
+					zap.Int("history_index", i),
+					zap.String("tool_call_id", msg.ToolCallID))
+				continue
+			}
+
 			// 检查是否有前置的 assistant 消息
 			var foundAssistant bool
 			for j := i - 1; j >= 0; j-- {

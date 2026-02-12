@@ -453,12 +453,16 @@ func defaultConvertToLLM(messages []AgentMessage) ([]providers.Message, error) {
 		for _, block := range msg.Content {
 			switch b := block.(type) {
 			case TextContent:
-				providerMsg.Content = b.Text
+				if providerMsg.Content != "" {
+					providerMsg.Content += "\n" + b.Text
+				} else {
+					providerMsg.Content = b.Text
+				}
 			case ImageContent:
 				if b.Data != "" {
-					providerMsg.Images = []string{b.Data}
+					providerMsg.Images = append(providerMsg.Images, b.Data)
 				} else if b.URL != "" {
-					providerMsg.Images = []string{b.URL}
+					providerMsg.Images = append(providerMsg.Images, b.URL)
 				}
 			}
 		}
@@ -478,10 +482,13 @@ func defaultConvertToLLM(messages []AgentMessage) ([]providers.Message, error) {
 			providerMsg.ToolCalls = toolCalls
 		}
 
-		// Handle tool_call_id for tool result messages
+		// Handle tool_call_id and tool_name for tool result messages
 		if msg.Role == RoleToolResult {
 			if toolCallID, ok := msg.Metadata["tool_call_id"].(string); ok {
 				providerMsg.ToolCallID = toolCallID
+			}
+			if toolName, ok := msg.Metadata["tool_name"].(string); ok {
+				providerMsg.ToolName = toolName
 			}
 		}
 

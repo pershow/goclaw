@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -459,6 +460,41 @@ func (m *AgentManager) handleInboundMessage(ctx context.Context, msg *bus.Inboun
 	// 执行 Agent
 	finalMessages, err := orchestrator.Run(ctx, allMessages)
 	if err != nil {
+		// Check if error is related to tool_call_id mismatch (old session format)
+		errStr := err.Error()
+		if strings.Contains(errStr, "tool_call_id") && strings.Contains(errStr, "mismatch") {
+			logger.Warn("Detected old session format, clearing session",
+				zap.String("session_key", sessionKey),
+				zap.Error(err))
+			// Clear old session and retry
+			if delErr := m.sessionMgr.Delete(sessionKey); delErr != nil {
+				logger.Error("Failed to clear old session", zap.Error(delErr))
+			} else {
+				logger.Info("Cleared old session, retrying with fresh session")
+				// Get fresh session
+				sess, getErr := m.sessionMgr.GetOrCreate(sessionKey)
+				if getErr != nil {
+					logger.Error("Failed to create fresh session", zap.Error(getErr))
+					return getErr
+				}
+				// Retry with fresh session (no history)
+				finalMessages, retryErr := orchestrator.Run(ctx, []AgentMessage{agentMsg})
+				if retryErr != nil {
+					logger.Error("Agent execution failed on retry", zap.Error(retryErr))
+					return retryErr
+				}
+				// Update session with new messages
+				m.updateSession(sess, finalMessages, 0)
+				// Publish response
+				if len(finalMessages) > 0 {
+					lastMsg := finalMessages[len(finalMessages)-1]
+					if lastMsg.Role == RoleAssistant {
+						m.publishToBus(ctx, msg.Channel, msg.ChatID, lastMsg)
+					}
+				}
+				return nil
+			}
+		}
 		logger.Error("Agent execution failed", zap.Error(err))
 		return err
 	}
