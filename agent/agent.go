@@ -24,10 +24,10 @@ type Agent struct {
 	context      *ContextBuilder
 	workspace    string
 
-	mu           sync.RWMutex
-	state        *AgentState
-	eventSubs    []chan *Event
-	running      bool
+	mu        sync.RWMutex
+	state     *AgentState
+	eventSubs []chan *Event
+	running   bool
 }
 
 // NewAgentConfig configures the agent
@@ -59,10 +59,10 @@ func NewAgent(cfg *NewAgentConfig) (*Agent, error) {
 	state.Tools = ToAgentTools(cfg.Tools.ListExisting())
 
 	loopConfig := &LoopConfig{
-		Model:           state.Model,
-		Provider:        cfg.Provider,
-		SessionMgr:      cfg.SessionMgr,
-		MaxIterations:   cfg.MaxIteration,
+		Model:            state.Model,
+		Provider:         cfg.Provider,
+		SessionMgr:       cfg.SessionMgr,
+		MaxIterations:    cfg.MaxIteration,
 		ConvertToLLM:     defaultConvertToLLM,
 		TransformContext: nil,
 		GetSteeringMessages: func() ([]AgentMessage, error) {
@@ -126,7 +126,7 @@ func (a *Agent) Stop() error {
 // Prompt sends a user message to the agent
 func (a *Agent) Prompt(ctx context.Context, content string) error {
 	a.mu.Lock()
-	a.mu.Unlock()
+	defer a.mu.Unlock()
 
 	msg := AgentMessage{
 		Role:      RoleUser,
@@ -213,8 +213,8 @@ func (a *Agent) handleInboundMessage(ctx context.Context, msg *bus.InboundMessag
 	for _, m := range msg.Media {
 		if m.Type == "image" {
 			imgContent := ImageContent{
-				URL:     m.URL,
-				Data:    m.Base64,
+				URL:      m.URL,
+				Data:     m.Base64,
 				MimeType: m.MimeType,
 			}
 			agentMsg.Content = append(agentMsg.Content, imgContent)

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/smallnest/goclaw/agent"
 	"github.com/smallnest/goclaw/config"
@@ -90,12 +91,22 @@ var skillsInstallDepsCmd = &cobra.Command{
 	Run:   runSkillsInstallDeps,
 }
 
+var skillsSearchCmd = &cobra.Command{
+	Use:   "search [query]",
+	Short: "Search for skills by name, description, or keywords",
+	Args:  cobra.MinimumNArgs(1),
+	Run:   runSkillsSearch,
+}
+
 func init() {
 	rootCmd.AddCommand(skillsCmd)
 
 	// list 命令
 	skillsListCmd.Flags().BoolVarP(&skillsListVerbose, "verbose", "v", false, "Show detailed information including prompt content")
 	skillsCmd.AddCommand(skillsListCmd)
+
+	// search 命令
+	skillsCmd.AddCommand(skillsSearchCmd)
 
 	// validate 命令
 	skillsCmd.AddCommand(skillsValidateCmd)
@@ -139,9 +150,10 @@ func runSkillsList(cmd *cobra.Command, args []string) {
 
 	// 创建工作区
 	workspace := os.Getenv("HOME") + "/.goclaw/workspace"
+	managedSkillsDir := os.Getenv("HOME") + "/.goclaw/skills"
 
 	// 创建技能加载器
-	skillsLoader := agent.NewSkillsLoader(workspace, []string{})
+	skillsLoader := agent.NewSkillsLoader(workspace, []string{managedSkillsDir})
 	if err := skillsLoader.Discover(); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to discover skills: %v\n", err)
 		os.Exit(1)
@@ -212,9 +224,10 @@ func runSkillsValidate(cmd *cobra.Command, args []string) {
 
 	// 创建工作区
 	workspace := os.Getenv("HOME") + "/.goclaw/workspace"
+	managedSkillsDir := os.Getenv("HOME") + "/.goclaw/skills"
 
 	// 创建技能加载器
-	skillsLoader := agent.NewSkillsLoader(workspace, []string{})
+	skillsLoader := agent.NewSkillsLoader(workspace, []string{managedSkillsDir})
 	if err := skillsLoader.Discover(); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to discover skills: %v\n", err)
 		os.Exit(1)
@@ -339,9 +352,10 @@ func runSkillsTest(cmd *cobra.Command, args []string) {
 
 	// 创建工作区
 	workspace := os.Getenv("HOME") + "/.goclaw/workspace"
+	managedSkillsDir := os.Getenv("HOME") + "/.goclaw/skills"
 
 	// 创建技能加载器
-	skillsLoader := agent.NewSkillsLoader(workspace, []string{})
+	skillsLoader := agent.NewSkillsLoader(workspace, []string{managedSkillsDir})
 	if err := skillsLoader.Discover(); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to discover skills: %v\n", err)
 		os.Exit(1)
@@ -642,9 +656,10 @@ func runSkillsInstallDeps(cmd *cobra.Command, args []string) {
 
 	// 创建工作区
 	workspace := os.Getenv("HOME") + "/.goclaw/workspace"
+	managedSkillsDir := os.Getenv("HOME") + "/.goclaw/skills"
 
 	// 创建技能加载器并启用自动安装
-	skillsLoader := agent.NewSkillsLoader(workspace, []string{})
+	skillsLoader := agent.NewSkillsLoader(workspace, []string{managedSkillsDir})
 	skillsLoader.SetAutoInstall(true)
 
 	if err := skillsLoader.Discover(); err != nil {
@@ -666,4 +681,45 @@ func runSkillsInstallDeps(cmd *cobra.Command, args []string) {
 	}
 
 	fmt.Println("\n✅ All dependencies installed successfully")
+}
+
+func runSkillsSearch(cmd *cobra.Command, args []string) {
+	query := strings.Join(args, " ")
+
+	// 初始化日志
+	if err := logger.Init("warn", false); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() { _ = logger.Sync() }()
+
+	// 检查 npx 是否可用
+	if _, err := exec.LookPath("npx"); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ npx is not installed. Please install Node.js and npm.\n")
+		fmt.Println("\nVisit: https://nodejs.org/")
+		os.Exit(1)
+	}
+
+	// 调用 npx skills find 命令
+	fmt.Printf("Searching for skills: %s\n\n", query)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmdFind := exec.CommandContext(ctx, "npx", "skills", "find", query)
+	cmdFind.Stdout = os.Stdout
+	cmdFind.Stderr = os.Stderr
+
+	if err := cmdFind.Run(); err != nil {
+		// npx skills find 可能返回非零退出码但仍然有输出
+		// 检查是否有任何输出
+		if ctx.Err() == context.DeadlineExceeded {
+			fmt.Fprintf(os.Stderr, "\n⚠️  Search timed out after 30 seconds\n")
+			fmt.Println("\nTry a more specific search term.")
+		}
+		os.Exit(1)
+	}
+
+	fmt.Println("\nTo install a skill:")
+	fmt.Println("  goclaw skills install <url>")
 }

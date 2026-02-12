@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -662,4 +663,103 @@ func (l *SkillsLoader) getMissingDeps(skill *Skill) *MissingDeps {
 	}
 
 	return &missing
+}
+
+// SearchResult 搜索结果
+type SearchResult struct {
+	Skill   *Skill
+	Source  string // skill的来源路径
+	Score   float64
+	Matches []string // 匹配的字段
+}
+
+// Search 搜索技能
+func (l *SkillsLoader) Search(query string) []*SearchResult {
+	if len(l.skills) == 0 {
+		return nil
+	}
+
+	query = strings.ToLower(query)
+	var results []*SearchResult
+
+	for name, skill := range l.skills {
+		score := 0.0
+		var matches []string
+
+		// 检查名称匹配
+		if strings.Contains(strings.ToLower(name), query) {
+			// 精确匹配得分更高
+			if strings.EqualFold(name, query) {
+				score += 1.0
+				matches = append(matches, "name (exact)")
+			} else {
+				score += 0.8
+				matches = append(matches, "name")
+			}
+		}
+
+		// 检查描述匹配
+		lowerDesc := strings.ToLower(skill.Description)
+		if strings.Contains(lowerDesc, query) {
+			score += 0.6
+			matches = append(matches, "description")
+		}
+
+		// 检查作者匹配
+		if strings.Contains(strings.ToLower(skill.Author), query) {
+			score += 0.4
+			matches = append(matches, "author")
+		}
+
+		// 检查内容匹配（内容太长，只按关键词查找）
+		keywords := strings.Fields(query)
+		lowerContent := strings.ToLower(skill.Content)
+		contentMatches := 0
+		for _, keyword := range keywords {
+			if strings.Contains(lowerContent, strings.ToLower(keyword)) {
+				contentMatches++
+			}
+		}
+		if contentMatches > 0 {
+			contentScore := 0.3 * float64(contentMatches) / float64(len(keywords))
+			score += contentScore
+			if contentMatches == len(keywords) {
+				matches = append(matches, "content")
+			}
+		}
+
+		// 只返回有匹配的结果
+		if score > 0 {
+			results = append(results, &SearchResult{
+				Skill:   skill,
+				Source:  resolveSkillSource(skill),
+				Score:   score,
+				Matches: matches,
+			})
+		}
+	}
+
+	// 按得分排序
+	if len(results) > 0 {
+		sort.Slice(results, func(i, j int) bool {
+			return results[i].Score > results[j].Score
+		})
+	}
+
+	return results
+}
+
+// resolveSkillSource 解析技能来源
+func resolveSkillSource(skill *Skill) string {
+	// 检查是否来自远程仓库
+	if strings.Contains(skill.Homepage, "github.com") || strings.Contains(skill.Homepage, "gitlab.com") {
+		return "remote"
+	}
+
+	// 检查是否来自本地路径
+	if skill.Homepage != "" && (strings.HasPrefix(skill.Homepage, "/") || strings.HasPrefix(skill.Homepage, ".")) {
+		return "local"
+	}
+
+	return "builtin"
 }

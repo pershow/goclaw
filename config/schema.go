@@ -13,6 +13,8 @@ type Config struct {
 	Gateway   GatewayConfig   `mapstructure:"gateway" json:"gateway"`
 	Tools     ToolsConfig     `mapstructure:"tools" json:"tools"`
 	Approvals ApprovalsConfig `mapstructure:"approvals" json:"approvals"`
+	// Skills configuration (map[string]interface{} to be parsed by skills package)
+	Skills map[string]interface{} `mapstructure:"skills" json:"skills"`
 }
 
 // WorkspaceConfig Workspace 配置
@@ -225,3 +227,4 @@ type ApprovalsConfig struct {
 	Behavior  string   `mapstructure:"behavior" json:"behavior"`   // auto, manual, prompt
 	Allowlist []string `mapstructure:"allowlist" json:"allowlist"` // 工具允许列表
 }
+
