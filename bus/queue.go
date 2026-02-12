@@ -12,12 +12,13 @@ import (
 
 // MessageBus 消息总线
 type MessageBus struct {
-	inbound   chan *InboundMessage
-	outbound  chan *OutboundMessage
-	outSubs   map[string]chan *OutboundMessage
-	outSubsMu sync.RWMutex
-	mu        sync.RWMutex
-	closed    bool
+	inbound       chan *InboundMessage
+	outbound      chan *OutboundMessage
+	outSubs       map[string]chan *OutboundMessage
+	outSubsMu     sync.RWMutex
+	mu            sync.RWMutex
+	closed        bool
+	fanoutStopped bool
 }
 
 // NewMessageBus 创建消息总线
@@ -29,7 +30,7 @@ func NewMessageBus(bufferSize int) *MessageBus {
 		closed:   false,
 	}
 	// 启动广播 goroutine
-	go b.broadcastOutbound()
+	go b.fanoutMessages()
 	return b
 }
 
@@ -114,6 +115,7 @@ func (b *MessageBus) PublishOutbound(ctx context.Context, msg *OutboundMessage) 
 }
 
 // ConsumeOutbound 消费出站消息
+// 使用订阅机制，确保消息能够被正确接收
 func (b *MessageBus) ConsumeOutbound(ctx context.Context) (*OutboundMessage, error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -123,14 +125,18 @@ func (b *MessageBus) ConsumeOutbound(ctx context.Context) (*OutboundMessage, err
 		return nil, ErrBusClosed
 	}
 
+	// 创建临时订阅
+	sub := b.SubscribeOutbound()
+	defer sub.Unsubscribe()
+
+	// 等待消息
 	select {
-	case msg := <-b.outbound:
+	case msg := <-sub.Channel:
 		logger.Debug("Outbound message consumed from bus",
 			zap.String("id", msg.ID),
 			zap.String("channel", msg.Channel),
 			zap.String("chat_id", msg.ChatID),
-			zap.Int("content_length", len(msg.Content)),
-			zap.Int("outbound_queue_size", len(b.outbound)))
+			zap.Int("content_length", len(msg.Content)))
 		return msg, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -198,6 +204,7 @@ func (s *OutboundSubscription) Unsubscribe() {
 }
 
 // SubscribeOutbound 订阅出站消息（支持多个消费者）
+// 使用内部订阅机制，每个订阅者有独立的 channel
 // 返回一个 OutboundSubscription 对象，包含只读 channel 和取消订阅方法
 func (b *MessageBus) SubscribeOutbound() *OutboundSubscription {
 	b.outSubsMu.Lock()
@@ -234,15 +241,17 @@ func (b *MessageBus) UnsubscribeOutbound(subID string) {
 	}
 }
 
-// broadcastOutbound 广播出站消息到所有订阅者
-func (b *MessageBus) broadcastOutbound() {
-	logger.Info("Outbound broadcaster started, waiting for messages...")
+// fanoutMessages 将 outbound channel 的消息分发给所有订阅者
+// 这是唯一从 outbound channel 读取的地方
+func (b *MessageBus) fanoutMessages() {
+	logger.Info("Outbound fanout started, waiting for messages...")
+
 	for msg := range b.outbound {
 		b.outSubsMu.RLock()
 		subCount := len(b.outSubs)
 		b.outSubsMu.RUnlock()
 
-		logger.Info("Broadcasting outbound message",
+		logger.Debug("Fanout outbound message",
 			zap.Int("subscribers", subCount),
 			zap.Int("msg_content_length", len(msg.Content)))
 
@@ -269,17 +278,22 @@ func (b *MessageBus) broadcastOutbound() {
 		}
 		b.outSubsMu.RUnlock()
 
-		logger.Info("Broadcast completed",
+		logger.Debug("Fanout completed",
 			zap.Int("sent_to", sentCount),
 			zap.Int("total_subscribers", subCount))
 	}
 
-	logger.Info("Outbound broadcaster stopped")
+	b.mu.Lock()
+	b.fanoutStopped = true
+	b.mu.Unlock()
+
+	logger.Info("Outbound fanout stopped")
 }
 
-// OutboundChan 获取出站消息通道（用于直接 select）
-// 注意：如果需要多个消费者，请使用 SubscribeOutbound 代替
+// OutboundChan 获取出站消息通道（已废弃）
+// 此方法已废弃，请使用 SubscribeOutbound 代替
 func (b *MessageBus) OutboundChan() <-chan *OutboundMessage {
+	logger.Warn("OutboundChan is deprecated, use SubscribeOutbound instead")
 	return b.outbound
 }
 
