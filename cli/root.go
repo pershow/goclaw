@@ -84,6 +84,7 @@ func init() {
 	rootCmd.AddCommand(commands.GatewayCommand())
 	rootCmd.AddCommand(commands.HealthCommand())
 	rootCmd.AddCommand(commands.StatusCommand())
+	rootCmd.AddCommand(commands.ChannelsCommand())
 
 	// Register approvals, cron, system commands (registered via init)
 	// These commands auto-register themselves

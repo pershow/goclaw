@@ -224,13 +224,20 @@ func (c *FeishuChannel) verifySignature(r *http.Request, body []byte) bool {
 
 // Send 发送消息
 func (c *FeishuChannel) Send(msg *bus.OutboundMessage) error {
+	// 构建 content JSON 对象，使用 json.Marshal 正确转义特殊字符
+	contentMap := map[string]string{"text": msg.Content}
+	contentBytes, err := json.Marshal(contentMap)
+	if err != nil {
+		return fmt.Errorf("failed to marshal content: %w", err)
+	}
+
 	// 构建请求
 	req := larkim.NewCreateMessageReqBuilder().
 		ReceiveIdType(larkim.ReceiveIdTypeChatId).
 		Body(larkim.NewCreateMessageReqBodyBuilder().
 			ReceiveId(msg.ChatID).
 			MsgType(larkim.MsgTypeText).
-			Content(fmt.Sprintf(`{"text":"%s"}`, msg.Content)).
+			Content(string(contentBytes)).
 			Build()).
 		Build()
 
