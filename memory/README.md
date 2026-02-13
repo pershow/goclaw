@@ -112,6 +112,32 @@ longTerm, err := manager.SearchBySource(ctx, memory.MemorySourceLongTerm)
 
 ## Configuration
 
+### config.json（应用配置）
+
+在 `config.json` 的 `memory.builtin` 下可配置 `embedding`，用于语义搜索与批量嵌入（与 OpenClaw 的 provider/fallback 对齐）：
+
+```json
+{
+  "memory": {
+    "backend": "builtin",
+    "builtin": {
+      "enabled": true,
+      "database_path": "",
+      "auto_index": true,
+      "embedding": {
+        "provider": "openai",
+        "fallback": ""
+      }
+    }
+  }
+}
+```
+
+- **provider**：主嵌入提供商，如 `openai`。API Key 来自 `providers.openai.api_key` 或环境变量 `OPENAI_API_KEY`。
+- **fallback**：可选备用提供商；主提供商创建失败或调用失败时可切换（当前仅 openai 实现，fallback 留空即可）。
+
+未配置 `embedding` 时，builtin 仍可创建，但 Search/Add 需要 provider 时会返回错误；仅做状态查询等无需嵌入的场景可省略。
+
 ### Store Options
 
 ```go

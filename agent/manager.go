@@ -135,7 +135,7 @@ func (m *AgentManager) SetupFromConfig(cfg *config.Config, contextBuilder *Conte
 	if len(m.agents) == 0 {
 		logger.Info("No agents configured, creating default agent")
 		defaultAgentCfg := config.AgentConfig{
-			ID:        "default",
+			ID:        "main", // 使用 "main" 作为默认 Agent ID，与 gateway 返回的 mainSessionKey 一致
 			Name:      "Default Agent",
 			Default:   true,
 			Model:     cfg.Agents.Defaults.Model,
@@ -159,6 +159,9 @@ func (m *AgentManager) SetupFromConfig(cfg *config.Config, contextBuilder *Conte
 
 	// 4. 设置分身支持
 	m.setupSubagentSupport(cfg, contextBuilder)
+
+	// 5. 注册会话类工具（sessions_list, sessions_history, sessions_send, session_status）
+	m.setupSessionTools()
 
 	logger.Info("Agent manager setup complete",
 		zap.Int("agents", len(m.agents)),
@@ -226,6 +229,26 @@ func (m *AgentManager) setupSubagentSupport(cfg *config.Config, contextBuilder *
 	logger.Info("Subagent support configured")
 }
 
+// setupSessionTools 注册会话类工具（sessions_list, sessions_history, sessions_send, session_status）
+func (m *AgentManager) setupSessionTools() {
+	if err := m.tools.RegisterExisting(tools.NewSessionsListTool(m.sessionMgr)); err != nil {
+		logger.Warn("Failed to register sessions_list tool", zap.Error(err))
+	}
+	if err := m.tools.RegisterExisting(tools.NewSessionsHistoryTool(m.sessionMgr)); err != nil {
+		logger.Warn("Failed to register sessions_history tool", zap.Error(err))
+	}
+	sendTool := tools.NewSessionsSendTool(m.sessionMgr, func(ctx context.Context, sessionKey, content string) error {
+		return m.sendToSession(sessionKey, content)
+	})
+	if err := m.tools.RegisterExisting(sendTool); err != nil {
+		logger.Warn("Failed to register sessions_send tool", zap.Error(err))
+	}
+	// session_status 不注入 currentKey，调用方需传 session_key 参数
+	if err := m.tools.RegisterExisting(tools.NewSessionStatusTool(m.sessionMgr, nil)); err != nil {
+		logger.Warn("Failed to register session_status tool", zap.Error(err))
+	}
+}
+
 // subagentRegistryAdapter 分身注册表适配器
 type subagentRegistryAdapter struct {
 	registry *SubagentRegistry
@@ -233,15 +256,15 @@ type subagentRegistryAdapter struct {
 
 // RegisterRun 注册分身运行
 func (a *subagentRegistryAdapter) RegisterRun(params *tools.SubagentRunParams) error {
-	// 转换 RequesterOrigin
+	// 转换并规范化 RequesterOrigin（与 OpenClaw DeliveryContext 对齐）
 	var requesterOrigin *DeliveryContext
 	if params.RequesterOrigin != nil {
-		requesterOrigin = &DeliveryContext{
+		requesterOrigin = NormalizeDeliveryContext(&DeliveryContext{
 			Channel:   params.RequesterOrigin.Channel,
 			AccountID: params.RequesterOrigin.AccountID,
 			To:        params.RequesterOrigin.To,
 			ThreadID:  params.RequesterOrigin.ThreadID,
-		}
+		})
 	}
 
 	return a.registry.RegisterRun(&SubagentRunParams{
@@ -324,19 +347,28 @@ func (m *AgentManager) createAgent(cfg config.AgentConfig, contextBuilder *Conte
 	temperature := globalCfg.Agents.Defaults.Temperature
 	maxTokens := globalCfg.Agents.Defaults.MaxTokens
 
+	// 上下文窗口与压缩：从 agent 默认与 profile 解析（profile 暂不传）
+	ctxTokens, _ := ResolveContextWindow(globalCfg.Agents.Defaults.ContextTokens, 0)
+	reserveTokens := EffectiveReserveTokens(0) // 4096
+	maxHistoryTurns := globalCfg.Agents.Defaults.LimitHistoryTurns // 0 表示不限制轮次（与 OpenClaw 对齐）
+
 	// 创建 Agent
 	agent, err := NewAgent(&NewAgentConfig{
-		Bus:          m.bus,
-		Provider:     m.provider,
-		SessionMgr:   m.sessionMgr,
-		Tools:        m.tools,
-		Context:      contextBuilder,
-		Model:        model,
-		Workspace:    workspace,
-		MaxIteration: maxIterations,
-		Temperature:  temperature,
-		MaxTokens:    maxTokens,
-		SkillsLoader: m.skillsLoader,
+		ID:                   cfg.ID, // 传递 agent ID
+		Bus:                  m.bus,
+		Provider:             m.provider,
+		SessionMgr:           m.sessionMgr,
+		Tools:                m.tools,
+		Context:              contextBuilder,
+		Model:                model,
+		Workspace:            workspace,
+		MaxIteration:         maxIterations,
+		Temperature:          temperature,
+		MaxTokens:            maxTokens,
+		ContextWindowTokens:  ctxTokens,
+		ReserveTokens:        reserveTokens,
+		MaxHistoryTurns:      maxHistoryTurns,
+		SkillsLoader:         m.skillsLoader,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create agent %s: %w", cfg.ID, err)
@@ -429,12 +461,43 @@ func (m *AgentManager) handleInboundMessage(ctx context.Context, msg *bus.Inboun
 		zap.String("account_id", msg.AccountID),
 		zap.String("chat_id", msg.ChatID))
 
-	// 生成会话键（包含 account_id 以区分不同账号的消息）
-	sessionKey := fmt.Sprintf("%s:%s:%s", msg.Channel, msg.AccountID, msg.ChatID)
-	if msg.ChatID == "default" || msg.ChatID == "" {
-		sessionKey = fmt.Sprintf("%s:%s:%d", msg.Channel, msg.AccountID, msg.Timestamp.Unix())
-		logger.Info("Creating fresh session", zap.String("session_key", sessionKey))
+	// 获取 agent ID（从 agent 实例或使用默认值）
+	agentID := session.DefaultAgentID
+	if agent != nil && agent.GetID() != "" {
+		agentID = agent.GetID()
 	}
+
+	// 获取配置中的 mainKey
+	mainKey := session.DefaultMainKey
+	if m.cfg != nil && m.cfg.Session.MainKey != "" {
+		mainKey = m.cfg.Session.MainKey
+	}
+
+	// 生成会话键（与 OpenClaw 对齐：所有 session key 都以 agent:<agentId>: 开头）
+	var sessionKey string
+	if msg.Channel == "websocket" {
+		// Web 控制台：
+		// - 如果 chatID 已经是 agent:xxx:xxx 格式，直接使用
+		// - 否则使用主会话 key
+		if session.IsAgentSessionKey(msg.ChatID) {
+			sessionKey = msg.ChatID
+		} else {
+			sessionKey = session.BuildAgentMainSessionKey(agentID, mainKey)
+		}
+	} else if msg.ChatID == "default" || msg.ChatID == "" {
+		// CLI/default 场景：使用主会话
+		sessionKey = session.BuildAgentMainSessionKey(agentID, mainKey)
+		logger.Info("Using main session for default chat", zap.String("session_key", sessionKey))
+	} else {
+		// 其他渠道：根据是否为群组决定 session key
+		isGroup := session.IsGroupSessionKey(msg.ChatID) || strings.Contains(strings.ToLower(msg.ChatID), "group")
+		sessionKey = session.BuildAgentSessionKey(agentID, msg.Channel, msg.AccountID, msg.ChatID, mainKey, isGroup)
+	}
+
+	logger.Info("Resolved session key",
+		zap.String("original_chat_id", msg.ChatID),
+		zap.String("session_key", sessionKey),
+		zap.String("agent_id", agentID))
 
 	// 获取或创建会话
 	sess, err := m.sessionMgr.GetOrCreate(sessionKey)
@@ -464,18 +527,59 @@ func (m *AgentManager) handleInboundMessage(ctx context.Context, msg *bus.Inboun
 	// 获取 Agent 的 orchestrator
 	orchestrator := agent.GetOrchestrator()
 
-	// 加载历史消息并添加当前消息
+	// 加载历史消息并构造发给 orchestrator 的列表
+	// Web 控制台：Gateway 已在 session 中写入当前用户消息，此处仅用历史即可，避免重复一条 user
+	// 其他渠道：历史中可能不包含当前这条，需要追加 agentMsg
 	history := sess.GetHistory(-1) // -1 表示加载所有历史消息
 	historyAgentMsgs := sessionMessagesToAgentMessages(history)
-	allMessages := append(historyAgentMsgs, agentMsg)
+	var allMessages []AgentMessage
+	if msg.Channel == "websocket" {
+		allMessages = historyAgentMsgs
+	} else {
+		allMessages = append(historyAgentMsgs, agentMsg)
+	}
 
 	logger.Info("About to call orchestrator.Run",
 		zap.String("session_key", sessionKey),
 		zap.Int("history_count", len(history)),
 		zap.Int("all_messages_count", len(allMessages)))
 
+	// 订阅事件以支持流式输出
+	eventChan := orchestrator.Subscribe()
+
+	// 创建用于控制事件处理的 context
+	eventCtx, eventCancel := context.WithCancel(ctx)
+
+	// 启动事件处理 goroutine，累积流式内容
+	streamDone := make(chan struct{})
+	go func() {
+		defer close(streamDone)
+		var accumulated strings.Builder // 累积流式内容
+		for {
+			select {
+			case <-eventCtx.Done():
+				return
+			case event, ok := <-eventChan:
+				if !ok {
+					return
+				}
+				if event.Type == EventMessageDelta && event.Content != "" {
+					// 累积内容
+					accumulated.WriteString(event.Content)
+					// 发送累积的完整内容到 bus（前端期望 delta 事件包含累积内容）
+					m.publishStreamDelta(ctx, msg.Channel, msg.ChatID, msg.ID, accumulated.String())
+				}
+			}
+		}
+	}()
+
 	// 执行 Agent
 	finalMessages, err := orchestrator.Run(ctx, allMessages)
+
+	// 停止事件处理
+	eventCancel()
+	<-streamDone
+
 	logger.Info("orchestrator.Run returned",
 		zap.String("session_key", sessionKey),
 		zap.Int("final_messages_count", len(finalMessages)),
@@ -512,7 +616,7 @@ func (m *AgentManager) handleInboundMessage(ctx context.Context, msg *bus.Inboun
 				if len(finalMessages) > 0 {
 					lastMsg := finalMessages[len(finalMessages)-1]
 					if lastMsg.Role == RoleAssistant {
-						m.publishToBus(ctx, msg.Channel, msg.ChatID, lastMsg)
+						m.publishToBus(ctx, msg.Channel, msg.ChatID, msg.ID, lastMsg)
 					}
 				}
 				return nil
@@ -522,14 +626,14 @@ func (m *AgentManager) handleInboundMessage(ctx context.Context, msg *bus.Inboun
 		return err
 	}
 
-	// 更新会话（只保存新产生的消息）
+	// 更新会话（只保存新产生的消息）并在发布前完成 Save，保证 chat.history 能读到助手回复
 	m.updateSession(sess, finalMessages, len(history))
 
-	// 发布响应
+	// 发布响应（Save 已在 updateSession 内完成，前端收到 event 后拉 chat.history 可拿到完整会话）
 	if len(finalMessages) > 0 {
 		lastMsg := finalMessages[len(finalMessages)-1]
 		if lastMsg.Role == RoleAssistant {
-			m.publishToBus(ctx, msg.Channel, msg.ChatID, lastMsg)
+			m.publishToBus(ctx, msg.Channel, msg.ChatID, msg.ID, lastMsg)
 		}
 	}
 
@@ -591,10 +695,11 @@ func (m *AgentManager) updateSession(sess *session.Session, messages []AgentMess
 }
 
 // publishToBus 发布消息到总线
-func (m *AgentManager) publishToBus(ctx context.Context, channel, chatID string, msg AgentMessage) {
+func (m *AgentManager) publishToBus(ctx context.Context, channel, chatID, runID string, msg AgentMessage) {
 	content := extractTextContent(msg)
 
 	outbound := &bus.OutboundMessage{
+		ID:        runID, // 保留原始 runId，确保前端能匹配
 		Channel:   channel,
 		ChatID:    chatID,
 		Content:   content,
@@ -603,6 +708,22 @@ func (m *AgentManager) publishToBus(ctx context.Context, channel, chatID string,
 
 	if err := m.bus.PublishOutbound(ctx, outbound); err != nil {
 		logger.Error("Failed to publish outbound", zap.Error(err))
+	}
+}
+
+// publishStreamDelta 发布流式增量内容到总线
+func (m *AgentManager) publishStreamDelta(ctx context.Context, channel, chatID, runID, delta string) {
+	outbound := &bus.OutboundMessage{
+		ID:        runID,
+		Channel:   channel,
+		ChatID:    chatID,
+		Content:   delta,
+		IsStream:  true, // 标记为流式增量
+		Timestamp: time.Now(),
+	}
+
+	if err := m.bus.PublishOutbound(ctx, outbound); err != nil {
+		logger.Error("Failed to publish stream delta", zap.Error(err))
 	}
 }
 

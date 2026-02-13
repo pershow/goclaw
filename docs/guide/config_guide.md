@@ -29,6 +29,55 @@ This guide covers configuring goclaw, including new features like multi-provider
 }
 ```
 
+## Session Configuration
+
+会话作用域与重置策略（与 OpenClaw 对齐）：
+
+```json
+{
+  "session": {
+    "scope": "per-sender",
+    "store": "",
+    "reset": {
+      "mode": "daily",
+      "at_hour": 4,
+      "idle_minutes": 60
+    }
+  }
+}
+```
+
+- **scope**: `per-sender`（按发送方）或 `global`
+- **store**: 会话存储路径，空则用默认 `~/.goclaw/sessions`
+- **reset.mode**: `daily`（每日 at_hour 重置）或 `idle`（无活动 idle_minutes 后视为不新鲜）
+- **reset.at_hour**: 0–23，daily 时生效
+- **reset.idle_minutes**: idle 模式下多少分钟无活动视为不新鲜
+
+## Memory Configuration
+
+### Builtin 记忆（SQLite，默认仅 FTS）
+
+**默认不配置 embedding**，仅存文本并使用 FTS5 全文检索；需要语义搜索时再配置 `embedding`。
+
+```json
+{
+  "memory": {
+    "backend": "builtin",
+    "builtin": {
+      "enabled": true,
+      "database_path": "",
+      "auto_index": true,
+      "sync": { "watch": true, "watch_debounce_ms": 1500 }
+    }
+  }
+}
+```
+
+- **database_path**: 空则使用 `~/.goclaw/memory/store.db`
+- **embedding**: 可选，**默认不配置**。不配置时仅存文本、使用 FTS 全文检索；配置后支持语义搜索，如 `{ "provider": "openai", "fallback": "" }`，**provider** 主提供商，**fallback** 备用
+- **sync.watch**: 是否监听 `workspace/memory` 变更后自动重索引，默认 true（与 OpenClaw 一致）
+- **sync.watch_debounce_ms**: 去抖毫秒，默认 1500
+
 ## Provider Configuration
 
 ### Single Provider

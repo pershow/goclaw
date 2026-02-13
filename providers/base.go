@@ -23,6 +23,7 @@ type ToolCall struct {
 	Name     string                 `json:"name"`
 	Params   map[string]interface{} `json:"params"`
 	Response string                 `json:"response,omitempty"`
+	rawArgs  string                 // 内部使用，用于流式累积参数
 }
 
 // Response LLM 响应
@@ -51,6 +52,9 @@ type Provider interface {
 
 	// Close 关闭连接
 	Close() error
+
+	// SupportsStreaming 返回是否支持流式输出
+	SupportsStreaming() bool
 }
 
 // ToolDefinition 工具定义

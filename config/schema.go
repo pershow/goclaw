@@ -11,6 +11,7 @@ type Config struct {
 	Channels  ChannelsConfig  `mapstructure:"channels" json:"channels"`
 	Providers ProvidersConfig `mapstructure:"providers" json:"providers"`
 	Gateway   GatewayConfig   `mapstructure:"gateway" json:"gateway"`
+	Session   SessionConfig   `mapstructure:"session" json:"session"`
 	Tools     ToolsConfig     `mapstructure:"tools" json:"tools"`
 	Approvals ApprovalsConfig `mapstructure:"approvals" json:"approvals"`
 	Memory    MemoryConfig    `mapstructure:"memory" json:"memory"`
@@ -18,6 +19,22 @@ type Config struct {
 	Skills map[string]interface{} `mapstructure:"skills" json:"skills"`
 	// Agent 绑定配置
 	Bindings []BindingConfig `mapstructure:"bindings" json:"bindings"`
+}
+
+// SessionConfig 会话配置
+type SessionConfig struct {
+	Scope           string                    `mapstructure:"scope" json:"scope"`                       // per-sender | global，默认 per-sender
+	Store           string                    `mapstructure:"store" json:"store"`                       // 存储路径
+	MainKey         string                    `mapstructure:"main_key" json:"main_key"`                  // 主会话键（用于 per-sender 时的规范 key）
+	Reset           *SessionResetConfig      `mapstructure:"reset" json:"reset"`                        // 全局重置策略
+	ResetByChannel  map[string]SessionResetConfig `mapstructure:"reset_by_channel" json:"reset_by_channel"` // 按 channel 覆盖
+}
+
+// SessionResetConfig 会话重置策略
+type SessionResetConfig struct {
+	Mode        string `mapstructure:"mode" json:"mode"`               // daily | idle
+	AtHour      int    `mapstructure:"at_hour" json:"at_hour"`         // daily 时 0-23，默认 4
+	IdleMinutes int    `mapstructure:"idle_minutes" json:"idle_minutes"` // idle 时多少分钟无活动则视为不新鲜
 }
 
 // WorkspaceConfig Workspace 配置
@@ -33,11 +50,13 @@ type AgentsConfig struct {
 
 // AgentDefaults Agent 默认配置
 type AgentDefaults struct {
-	Model         string           `mapstructure:"model" json:"model"`
-	MaxIterations int              `mapstructure:"max_iterations" json:"max_iterations"`
-	Temperature   float64          `mapstructure:"temperature" json:"temperature"`
-	MaxTokens     int              `mapstructure:"max_tokens" json:"max_tokens"`
-	Subagents     *SubagentsConfig `mapstructure:"subagents" json:"subagents"`
+	Model             string           `mapstructure:"model" json:"model"`
+	MaxIterations     int              `mapstructure:"max_iterations" json:"max_iterations"`
+	Temperature       float64          `mapstructure:"temperature" json:"temperature"`
+	MaxTokens         int              `mapstructure:"max_tokens" json:"max_tokens"`
+	ContextTokens     int              `mapstructure:"context_tokens" json:"context_tokens"`           // 模型上下文窗口 token 数，0 表示用 provider 默认
+	LimitHistoryTurns int              `mapstructure:"limit_history_turns" json:"limit_history_turns"` // 发给 LLM 时最多保留的 user 轮次，0 表示不限制（与 OpenClaw 对齐）
+	Subagents         *SubagentsConfig `mapstructure:"subagents" json:"subagents"`
 }
 
 // SubagentsConfig 分身配置
@@ -211,18 +230,21 @@ type ProvidersConfig struct {
 	OpenRouter OpenRouterProviderConfig `mapstructure:"openrouter" json:"openrouter"`
 	OpenAI     OpenAIProviderConfig     `mapstructure:"openai" json:"openai"`
 	Anthropic  AnthropicProviderConfig  `mapstructure:"anthropic" json:"anthropic"`
+	Moonshot   MoonshotProviderConfig   `mapstructure:"moonshot" json:"moonshot"` // Kimi（月之暗面）OpenAI 兼容 API，与 OpenClaw 对齐
 	Profiles   []ProviderProfileConfig  `mapstructure:"profiles" json:"profiles"`
 	Failover   FailoverConfig           `mapstructure:"failover" json:"failover"`
 }
 
 // ProviderProfileConfig 提供商配置
 type ProviderProfileConfig struct {
-	Name      string                 `mapstructure:"name" json:"name"`
-	Provider  string                 `mapstructure:"provider" json:"provider"` // openai, anthropic, openrouter
-	APIKey    string                 `mapstructure:"api_key" json:"api_key"`
-	BaseURL   string                 `mapstructure:"base_url" json:"base_url"`
-	ExtraBody map[string]interface{} `mapstructure:"extra_body" json:"extra_body"`
-	Priority  int                    `mapstructure:"priority" json:"priority"`
+	Name          string                 `mapstructure:"name" json:"name"`
+	Provider      string                 `mapstructure:"provider" json:"provider"` // openai, anthropic, openrouter, moonshot
+	APIKey        string                 `mapstructure:"api_key" json:"api_key"`
+	BaseURL       string                 `mapstructure:"base_url" json:"base_url"`
+	ExtraBody     map[string]interface{} `mapstructure:"extra_body" json:"extra_body"`
+	Priority      int                    `mapstructure:"priority" json:"priority"`
+	ContextWindow int                    `mapstructure:"context_window" json:"context_window"` // 该 profile 的模型上下文窗口 token 数，0 表示默认
+	Streaming     *bool                  `mapstructure:"streaming" json:"streaming"`           // 是否启用流式输出，默认 true，某些模型（如 Ollama）可能需要禁用
 }
 
 // FailoverConfig 故障转移配置
@@ -245,6 +267,7 @@ type OpenRouterProviderConfig struct {
 	BaseURL    string `mapstructure:"base_url" json:"base_url"`
 	Timeout    int    `mapstructure:"timeout" json:"timeout"`
 	MaxRetries int    `mapstructure:"max_retries" json:"max_retries"`
+	Streaming  *bool  `mapstructure:"streaming" json:"streaming"` // 是否启用流式输出，默认 true（当前实现暂不支持流式，预留）
 }
 
 // OpenAIProviderConfig OpenAI 配置
@@ -253,6 +276,7 @@ type OpenAIProviderConfig struct {
 	BaseURL   string                 `mapstructure:"base_url" json:"base_url"`
 	Timeout   int                    `mapstructure:"timeout" json:"timeout"`
 	ExtraBody map[string]interface{} `mapstructure:"extra_body" json:"extra_body"`
+	Streaming *bool                  `mapstructure:"streaming" json:"streaming"` // 是否启用流式输出，默认 true
 }
 
 // AnthropicProviderConfig Anthropic 配置
@@ -260,6 +284,14 @@ type AnthropicProviderConfig struct {
 	APIKey  string `mapstructure:"api_key" json:"api_key"`
 	BaseURL string `mapstructure:"base_url" json:"base_url"`
 	Timeout int    `mapstructure:"timeout" json:"timeout"`
+}
+
+// MoonshotProviderConfig 月之暗面 Kimi 配置（OpenAI 兼容 API）
+type MoonshotProviderConfig struct {
+	APIKey    string `mapstructure:"api_key" json:"api_key"`
+	BaseURL   string `mapstructure:"base_url" json:"base_url"`
+	Timeout   int    `mapstructure:"timeout" json:"timeout"`
+	Streaming *bool  `mapstructure:"streaming" json:"streaming"` // 是否启用流式输出，默认 true
 }
 
 // GatewayConfig 网关配置
@@ -347,9 +379,23 @@ type MemoryConfig struct {
 
 // BuiltinMemoryConfig 内置 SQLite 记忆配置
 type BuiltinMemoryConfig struct {
-	Enabled      bool   `mapstructure:"enabled" json:"enabled"`
-	DatabasePath string `mapstructure:"database_path" json:"database_path"`
-	AutoIndex    bool   `mapstructure:"auto_index" json:"auto_index"`
+	Enabled      bool                    `mapstructure:"enabled" json:"enabled"`
+	DatabasePath string                  `mapstructure:"database_path" json:"database_path"`
+	AutoIndex    bool                    `mapstructure:"auto_index" json:"auto_index"`
+	Embedding    *BuiltinEmbeddingConfig `mapstructure:"embedding" json:"embedding"` // 可选，与 OpenClaw provider/fallback 对齐
+	Sync         *BuiltinSyncConfig      `mapstructure:"sync" json:"sync"`           // 与 OpenClaw sync.watch / onSearch 对齐
+}
+
+// BuiltinSyncConfig 内置记忆同步配置（watch / onSearch 等，与 OpenClaw 一致）
+type BuiltinSyncConfig struct {
+	Watch           bool `mapstructure:"watch" json:"watch"`                       // 监听 workspace/memory 变更后自动重索引，默认 true
+	WatchDebounceMs int  `mapstructure:"watch_debounce_ms" json:"watch_debounce_ms"` // 去抖毫秒，默认 1500
+}
+
+// BuiltinEmbeddingConfig 内置记忆嵌入配置（主 provider + 备用顺序）
+type BuiltinEmbeddingConfig struct {
+	Provider string `mapstructure:"provider" json:"provider"` // 主提供商，如 openai
+	Fallback string `mapstructure:"fallback" json:"fallback"`   // 备用提供商，如 gemini；空表示无备用
 }
 
 // QMDConfig QMD 记忆配置

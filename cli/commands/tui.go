@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -190,12 +191,21 @@ func runTUI(cmd *cobra.Command, args []string) {
 	messageBus := bus.NewMessageBus(100)
 	defer messageBus.Close()
 
-	// Create session manager
-	sessionDir := os.Getenv("HOME") + "/.goclaw/sessions"
+	// Create session manager（与 start/status 一致，Windows 兼容）
+	sessionDir := filepath.Join(internal.GetGoclawDir(), "sessions")
+	if cfg.Session.Store != "" {
+		sessionDir = cfg.Session.Store
+	}
 	sessionMgr, err := session.NewManager(sessionDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create session manager: %v\n", err)
 		os.Exit(1)
+	}
+	if cfg.Session.Reset != nil {
+		p := session.ToResetPolicy(&session.SessionResetConfigLike{
+			Mode: cfg.Session.Reset.Mode, AtHour: cfg.Session.Reset.AtHour, IdleMinutes: cfg.Session.Reset.IdleMinutes,
+		})
+		sessionMgr.SetResetPolicy(&p)
 	}
 
 	// Create memory store
@@ -213,9 +223,9 @@ func runTUI(cmd *cobra.Command, args []string) {
 	}
 	defer provider.Close()
 
-	// Create skills loader
-	goclawDir := os.Getenv("HOME") + "/.goclaw"
-	skillsDir := goclawDir + "/skills"
+	// Create skills loader（Windows 兼容）
+	goclawDir := internal.GetGoclawDir()
+	skillsDir := filepath.Join(goclawDir, "skills")
 	skillsLoader := agent.NewSkillsLoader(goclawDir, []string{skillsDir})
 	if err := skillsLoader.Discover(); err != nil {
 		logger.Warn("Failed to discover skills", zap.Error(err))

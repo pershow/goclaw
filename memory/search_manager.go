@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/smallnest/goclaw/config"
+	"github.com/smallnest/goclaw/internal"
 	"github.com/smallnest/goclaw/memory/qmd"
 )
 
@@ -25,8 +26,12 @@ type MemorySearchManager interface {
 
 // BuiltinSearchManager builtin 后端实现
 type BuiltinSearchManager struct {
-	manager *MemoryManager
-	dbPath  string
+	manager        *MemoryManager
+	dbPath         string
+	watcher        *Watcher
+	watchStore     *SQLiteStore
+	watchProvider  EmbeddingProvider
+	watchMemoryDir string
 }
 
 // QMDSearchManager QMD 后端实现
@@ -38,34 +43,47 @@ type QMDSearchManager struct {
 	workspace   string
 }
 
-// NewBuiltinSearchManager 创建 builtin 搜索管理器
+// NewBuiltinSearchManager 创建 builtin 搜索管理器（无嵌入 provider，仅 FTS/元数据或由调用方注入）
 func NewBuiltinSearchManager(cfg config.MemoryConfig, workspace string) (MemorySearchManager, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get home directory: %w", err)
-	}
+	return newBuiltinSearchManagerWithProvider(cfg, nil, workspace)
+}
 
+// NewBuiltinSearchManagerFromConfig 根据完整配置创建 builtin 搜索管理器；若 memory.builtin.embedding 已配置则创建带故障转移的嵌入 provider（与 OpenClaw 对齐）
+func NewBuiltinSearchManagerFromConfig(cfg *config.Config, workspace string) (MemorySearchManager, error) {
+	if cfg == nil {
+		return NewBuiltinSearchManager(config.MemoryConfig{}, workspace)
+	}
+	mem := cfg.Memory
+	var provider EmbeddingProvider
+	if mem.Builtin.Embedding != nil {
+		var err error
+		provider, err = NewEmbeddingProviderFromConfig(cfg, mem.Builtin.Embedding)
+		if err != nil {
+			return nil, fmt.Errorf("memory embedding provider: %w", err)
+		}
+	}
+	return newBuiltinSearchManagerWithProvider(mem, provider, workspace)
+}
+
+func newBuiltinSearchManagerWithProvider(cfg config.MemoryConfig, provider EmbeddingProvider, workspace string) (MemorySearchManager, error) {
 	dbPath := cfg.Builtin.DatabasePath
 	if dbPath == "" {
-		dbPath = filepath.Join(home, ".goclaw", "memory", "store.db")
+		dbPath = filepath.Join(internal.GetMemoryDir(), "store.db")
 	}
 
-	// 确保数据库目录存在
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		return nil, fmt.Errorf("failed to create database directory: %w", err)
 	}
 
-	// 创建存储
-	storeConfig := DefaultStoreConfig(dbPath, nil)
+	storeConfig := DefaultStoreConfig(dbPath, provider)
 	store, err := NewSQLiteStore(storeConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open memory store: %w", err)
 	}
 
-	// 创建管理器（不使用 provider，仅用于元数据）
 	managerConfig := ManagerConfig{
 		Store:        store,
-		Provider:     nil, // QMD 模式下不需要本地 provider
+		Provider:     provider,
 		CacheMaxSize: 1000,
 	}
 	manager, err := NewMemoryManager(managerConfig)
@@ -74,10 +92,47 @@ func NewBuiltinSearchManager(cfg config.MemoryConfig, workspace string) (MemoryS
 		return nil, fmt.Errorf("failed to create memory manager: %w", err)
 	}
 
-	return &BuiltinSearchManager{
+	bsm := &BuiltinSearchManager{
 		manager: manager,
 		dbPath:  dbPath,
-	}, nil
+	}
+
+	// 与 OpenClaw 一致：sync.watch 默认 true，自动监听 workspace/memory，变更后去抖重索引
+	syncCfg := cfg.Builtin.Sync
+	watchEnabled := workspace != "" && provider != nil && (syncCfg == nil || syncCfg.Watch)
+	if watchEnabled {
+		memoryDir := filepath.Join(workspace, "memory")
+		if err := os.MkdirAll(memoryDir, 0755); err != nil {
+			_ = manager.Close()
+			return nil, fmt.Errorf("create memory dir for watch: %w", err)
+		}
+		debounceMs := 1500
+		if syncCfg != nil && syncCfg.WatchDebounceMs > 0 {
+			debounceMs = syncCfg.WatchDebounceMs
+		}
+		debounce := time.Duration(debounceMs) * time.Millisecond
+		if debounce < time.Second {
+			debounce = time.Second
+		}
+		onSync := func() {
+			if bsm.watchStore != nil && bsm.watchProvider != nil {
+				_ = bsm.watchStore.RebuildAtomic(func(tmp Store) error {
+					return IndexWorkspaceToStore(context.Background(), tmp, bsm.watchProvider, bsm.watchMemoryDir)
+				})
+			}
+		}
+		watcher, err := NewWatcher(memoryDir, debounce, onSync)
+		if err != nil {
+			_ = manager.Close()
+			return nil, fmt.Errorf("memory watcher: %w", err)
+		}
+		bsm.watcher = watcher
+		bsm.watchStore = store
+		bsm.watchProvider = provider
+		bsm.watchMemoryDir = memoryDir
+	}
+
+	return bsm, nil
 }
 
 // Search 执行搜索
@@ -110,8 +165,12 @@ func (m *BuiltinSearchManager) GetStatus() map[string]interface{} {
 	return status
 }
 
-// Close 关闭管理器
+// Close 关闭管理器（含 watcher）
 func (m *BuiltinSearchManager) Close() error {
+	if m.watcher != nil {
+		_ = m.watcher.Close()
+		m.watcher = nil
+	}
 	return m.manager.Close()
 }
 
@@ -157,12 +216,10 @@ func NewQMDSearchManager(qmdCfg config.QMDConfig, workspace string) (MemorySearc
 	defer cancel()
 
 	if err := qmdMgr.Initialize(ctx); err != nil {
-		// QMD 不可用，使用 fallback
+		// QMD 不可用，使用 fallback（无嵌入 provider）
 		mgr, err := NewBuiltinSearchManager(config.MemoryConfig{
 			Backend: "builtin",
-			Builtin: config.BuiltinMemoryConfig{
-				Enabled: true,
-			},
+			Builtin: config.BuiltinMemoryConfig{Enabled: true},
 		}, workspace)
 		if err != nil {
 			return nil, err
@@ -199,9 +256,7 @@ func (m *QMDSearchManager) Search(ctx context.Context, query string, opts Search
 		if m.fallbackMgr == nil {
 			m.fallbackMgr, _ = NewBuiltinSearchManager(config.MemoryConfig{
 				Backend: "builtin",
-				Builtin: config.BuiltinMemoryConfig{
-					Enabled: true,
-				},
+				Builtin: config.BuiltinMemoryConfig{Enabled: true},
 			}, m.workspace)
 		}
 		m.useFallback = true
@@ -274,23 +329,33 @@ func (m *QMDSearchManager) Close() error {
 	return err2
 }
 
-// GetMemorySearchManager 根据配置创建搜索管理器
-func GetMemorySearchManager(cfg config.MemoryConfig, workspace string) (MemorySearchManager, error) {
-	switch cfg.Backend {
+// GetMemorySearchManager 根据配置创建搜索管理器。传入完整 Config 时若 backend=builtin 且配置了 embedding 则使用带故障转移的 provider。
+func GetMemorySearchManager(cfg *config.Config, workspace string) (MemorySearchManager, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("config is required")
+	}
+	mem := cfg.Memory
+	switch mem.Backend {
 	case "qmd":
-		if cfg.QMD.Enabled {
-			return NewQMDSearchManager(cfg.QMD, workspace)
+		if mem.QMD.Enabled {
+			return NewQMDSearchManager(mem.QMD, workspace)
 		}
-		// 回退到 builtin
 		return GetBuiltinSearchManager(cfg, workspace)
 	case "builtin", "":
 		return GetBuiltinSearchManager(cfg, workspace)
 	default:
-		return nil, fmt.Errorf("unknown memory backend: %s", cfg.Backend)
+		return nil, fmt.Errorf("unknown memory backend: %s", mem.Backend)
 	}
 }
 
-// GetBuiltinSearchManager 获取 builtin 搜索管理器
-func GetBuiltinSearchManager(cfg config.MemoryConfig, workspace string) (MemorySearchManager, error) {
-	return NewBuiltinSearchManager(cfg, workspace)
+// GetBuiltinSearchManager 获取 builtin 搜索管理器。若 cfg 非 nil 且 memory.builtin.embedding 已配置则创建带嵌入与故障转移的 manager。
+func GetBuiltinSearchManager(cfg *config.Config, workspace string) (MemorySearchManager, error) {
+	if cfg != nil && cfg.Memory.Builtin.Embedding != nil {
+		return NewBuiltinSearchManagerFromConfig(cfg, workspace)
+	}
+	memCfg := config.MemoryConfig{}
+	if cfg != nil {
+		memCfg = cfg.Memory
+	}
+	return NewBuiltinSearchManager(memCfg, workspace)
 }

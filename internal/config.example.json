@@ -6,8 +6,19 @@
     "defaults": {
       "model": "YOUR_DEFAULT_MODEL_HERE",
       "max_iterations": 15,
-      "temperature": 0.7,
-      "max_tokens": 4096
+      "temperature": 1,
+      "max_tokens": 8192,
+      "context_tokens": 0,
+      "limit_history_turns": 0
+    }
+  },
+  "session": {
+    "scope": "per-sender",
+    "store": "",
+    "reset": {
+      "mode": "daily",
+      "at_hour": 4,
+      "idle_minutes": 60
     }
   },
   "channels": {
@@ -27,7 +38,7 @@
       "app_secret": "",
       "encrypt_key": "",
       "verification_token": "",
-      "event_mode": "webhook",
+      "event_mode": "long_connection",
       "webhook_port": 8765
     },
     "qq": {
@@ -71,11 +82,51 @@
     }
   },
   "providers": {
+    "profiles": [
+      {
+        "name": "openai-primary",
+        "provider": "openai",
+        "api_key": "YOUR_OPENAI_API_KEY",
+        "base_url": "https://api.openai.com/v1",
+        "priority": 1,
+        "streaming": true
+      },
+      {
+        "name": "deepseek",
+        "provider": "openai",
+        "api_key": "YOUR_DEEPSEEK_API_KEY",
+        "base_url": "https://api.deepseek.com",
+        "priority": 2,
+        "streaming": true
+      },
+      {
+        "name": "kimi",
+        "provider": "moonshot",
+        "api_key": "YOUR_MOONSHOT_KIMI_API_KEY",
+        "base_url": "https://api.moonshot.cn/v1",
+        "priority": 2,
+        "streaming": true
+      },
+      {
+        "name": "ollama-local",
+        "provider": "openai",
+        "api_key": "ollama",
+        "base_url": "http://localhost:11434/v1",
+        "priority": 3,
+        "streaming": false
+      }
+    ],
+    "failover": {
+      "enabled": false,
+      "strategy": "round_robin",
+      "default_cooldown": "5m"
+    },
     "openrouter": {
       "api_key": "",
       "base_url": "",
       "timeout": 600,
       "max_retries": 3,
+      "streaming": true,
       "extra_body": {
         "reasoning": {
           "enabled": false
@@ -92,11 +143,17 @@
       "api_key": "",
       "base_url": "",
       "timeout": 600
+    },
+    "moonshot": {
+      "api_key": "YOUR_MOONSHOT_KIMI_API_KEY",
+      "base_url": "https://api.moonshot.cn/v1",
+      "timeout": 600,
+      "streaming": true
     }
   },
   "gateway": {
     "host": "localhost",
-    "port": 8080,
+    "port": 28789,
     "read_timeout": 30,
     "write_timeout": 30,
     "websocket": {
@@ -119,7 +176,11 @@
     "shell": {
       "enabled": true,
       "allowed_cmds": [],
-      "denied_cmds": ["rm -rf", "dd", "mkfs"],
+      "denied_cmds": [
+        "rm -rf",
+        "dd",
+        "mkfs"
+      ],
       "timeout": 30,
       "working_dir": ""
     },
@@ -139,7 +200,11 @@
     "builtin": {
       "enabled": true,
       "database_path": "",
-      "auto_index": true
+      "auto_index": true,
+      "sync": {
+        "watch": true,
+        "watch_debounce_ms": 1500
+      }
     },
     "qmd": {
       "command": "qmd",

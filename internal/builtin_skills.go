@@ -30,6 +30,16 @@ func GetConfigPath() string {
 	return filepath.Join(GetGoclawDir(), "config.json")
 }
 
+// GetMemoryDir 获取内置记忆数据目录（.goclaw/memory，存放 store.db 等）
+func GetMemoryDir() string {
+	return filepath.Join(GetGoclawDir(), "memory")
+}
+
+// EnsureMemoryDir 确保 .goclaw/memory 目录存在（builtin 记忆 store.db 的默认位置）
+func EnsureMemoryDir() error {
+	return os.MkdirAll(GetMemoryDir(), 0755)
+}
+
 // EnsureBuiltinSkills 确保内置技能被复制到用户目录
 // 支持增量复制：只复制缺失的技能，不会覆盖已存在的技能
 func EnsureBuiltinSkills() error {

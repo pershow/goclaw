@@ -193,3 +193,8 @@ func (p *AnthropicProvider) ChatWithTools(ctx context.Context, messages []Messag
 func (p *AnthropicProvider) Close() error {
 	return nil
 }
+
+// SupportsStreaming returns whether streaming is supported (currently false for Anthropic via langchaingo).
+func (p *AnthropicProvider) SupportsStreaming() bool {
+	return false // langchaingo 的 Anthropic 实现暂不支持流式
+}

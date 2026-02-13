@@ -33,12 +33,13 @@ func (m *InboundMessage) SessionKey() string {
 // OutboundMessage 出站消息
 type OutboundMessage struct {
 	ID        string                 `json:"id"`
-	Channel   string                 `json:"channel"`  // telegram, whatsapp, feishu, cli
-	ChatID    string                 `json:"chat_id"`  // 聊天ID
-	Content   string                 `json:"content"`  // 消息内容
-	Media     []Media                `json:"media"`    // 媒体文件
-	ReplyTo   string                 `json:"reply_to"` // 回复的消息ID
-	Metadata  map[string]interface{} `json:"metadata"` // 元数据
+	Channel   string                 `json:"channel"`   // telegram, whatsapp, feishu, cli
+	ChatID    string                 `json:"chat_id"`   // 聊天ID
+	Content   string                 `json:"content"`   // 消息内容
+	Media     []Media                `json:"media"`     // 媒体文件
+	ReplyTo   string                 `json:"reply_to"`  // 回复的消息ID
+	Metadata  map[string]interface{} `json:"metadata"`  // 元数据
+	IsStream  bool                   `json:"is_stream"` // 是否为流式增量内容
 	Timestamp time.Time              `json:"timestamp"`
 }
 

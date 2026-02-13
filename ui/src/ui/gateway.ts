@@ -1,10 +1,20 @@
-// WebSocket Gateway Client for GoClaw
+import { buildDeviceAuthPayload } from "../gateway/device-auth.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+  type GatewayClientMode,
+  type GatewayClientName,
+} from "../gateway/protocol/client-info.js";
+import { clearDeviceAuthToken, loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
+import { loadOrCreateDeviceIdentity, signDevicePayload } from "./device-identity.ts";
+import { generateUUID } from "./uuid.ts";
 
 export type GatewayEventFrame = {
   type: "event";
   event: string;
   payload?: unknown;
   seq?: number;
+  stateVersion?: { presence: number; health: number };
 };
 
 export type GatewayResponseFrame = {
@@ -18,7 +28,15 @@ export type GatewayResponseFrame = {
 export type GatewayHelloOk = {
   type: "hello-ok";
   protocol: number;
-  sessionId?: string;
+  features?: { methods?: string[]; events?: string[] };
+  snapshot?: unknown;
+  auth?: {
+    deviceToken?: string;
+    role?: string;
+    scopes?: string[];
+    issuedAtMs?: number;
+  };
+  policy?: { tickIntervalMs?: number };
 };
 
 type Pending = {
@@ -29,18 +47,30 @@ type Pending = {
 export type GatewayBrowserClientOptions = {
   url: string;
   token?: string;
+  password?: string;
+  clientName?: GatewayClientName;
+  clientVersion?: string;
+  platform?: string;
+  mode?: GatewayClientMode;
+  instanceId?: string;
   onHello?: (hello: GatewayHelloOk) => void;
   onEvent?: (evt: GatewayEventFrame) => void;
   onClose?: (info: { code: number; reason: string }) => void;
+  onGap?: (info: { expected: number; received: number }) => void;
 };
+
+// 4008 = application-defined code (browser rejects 1008 "Policy Violation")
+const CONNECT_FAILED_CLOSE_CODE = 4008;
 
 export class GatewayBrowserClient {
   private ws: WebSocket | null = null;
   private pending = new Map<string, Pending>();
   private closed = false;
   private lastSeq: number | null = null;
+  private connectNonce: string | null = null;
+  private connectSent = false;
+  private connectTimer: number | null = null;
   private backoffMs = 800;
-  private requestId = 0;
 
   constructor(private opts: GatewayBrowserClientOptions) {}
 
@@ -64,33 +94,18 @@ export class GatewayBrowserClient {
     if (this.closed) {
       return;
     }
-
-    const url = this.opts.token
-      ? `${this.opts.url}?token=${encodeURIComponent(this.opts.token)}`
-      : this.opts.url;
-
-    this.ws = new WebSocket(url);
-
-    this.ws.addEventListener("open", () => {
-      console.log("Gateway connected");
-      this.backoffMs = 800;
-    });
-
-    this.ws.addEventListener("message", (ev) => {
-      this.handleMessage(String(ev.data ?? ""));
-    });
-
+    this.ws = new WebSocket(this.opts.url);
+    this.ws.addEventListener("open", () => this.queueConnect());
+    this.ws.addEventListener("message", (ev) => this.handleMessage(String(ev.data ?? "")));
     this.ws.addEventListener("close", (ev) => {
       const reason = String(ev.reason ?? "");
-      console.log(`Gateway closed (${ev.code}): ${reason}`);
       this.ws = null;
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
       this.opts.onClose?.({ code: ev.code, reason });
       this.scheduleReconnect();
     });
-
     this.ws.addEventListener("error", () => {
-      console.error("Gateway error");
+      // ignored; close handler will fire
     });
   }
 
@@ -110,78 +125,188 @@ export class GatewayBrowserClient {
     this.pending.clear();
   }
 
-  private handleMessage(data: string) {
-    try {
-      const msg = JSON.parse(data);
-      console.log("Received message:", msg);
+  private async sendConnect() {
+    if (this.connectSent) {
+      return;
+    }
+    this.connectSent = true;
+    if (this.connectTimer !== null) {
+      window.clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
 
-      // Handle different message types
-      if (msg.jsonrpc === "2.0") {
-        // JSON-RPC response
-        if (msg.method === "connected") {
-          // Welcome message
-          const hello: GatewayHelloOk = {
-            type: "hello-ok",
-            protocol: 2,
-            sessionId: msg.params?.session_id,
-          };
-          this.opts.onHello?.(hello);
-        } else if (msg.method) {
-          // Notification/Event
-          const evt: GatewayEventFrame = {
-            type: "event",
-            event: msg.method,
-            payload: msg.params,
-          };
-          this.opts.onEvent?.(evt);
-        } else if (msg.id) {
-          // Response to our request
-          const pending = this.pending.get(String(msg.id));
-          if (pending) {
-            this.pending.delete(String(msg.id));
-            if (msg.error) {
-              pending.reject(new Error(msg.error.message || "Request failed"));
-            } else {
-              pending.resolve(msg.result);
-            }
+    // crypto.subtle is only available in secure contexts (HTTPS, localhost).
+    // Over plain HTTP, we skip device identity and fall back to token-only auth.
+    // Gateways may reject this unless gateway.controlUi.allowInsecureAuth is enabled.
+    const isSecureContext = typeof crypto !== "undefined" && !!crypto.subtle;
+
+    const scopes = ["operator.admin", "operator.approvals", "operator.pairing"];
+    const role = "operator";
+    let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
+    let canFallbackToShared = false;
+    let authToken = this.opts.token;
+
+    if (isSecureContext) {
+      deviceIdentity = await loadOrCreateDeviceIdentity();
+      const storedToken = loadDeviceAuthToken({
+        deviceId: deviceIdentity.deviceId,
+        role,
+      })?.token;
+      authToken = storedToken ?? this.opts.token;
+      canFallbackToShared = Boolean(storedToken && this.opts.token);
+    }
+    const auth =
+      authToken || this.opts.password
+        ? {
+            token: authToken,
+            password: this.opts.password,
           }
+        : undefined;
+
+    let device:
+      | {
+          id: string;
+          publicKey: string;
+          signature: string;
+          signedAt: number;
+          nonce: string | undefined;
         }
+      | undefined;
+
+    if (isSecureContext && deviceIdentity) {
+      const signedAtMs = Date.now();
+      const nonce = this.connectNonce ?? undefined;
+      const payload = buildDeviceAuthPayload({
+        deviceId: deviceIdentity.deviceId,
+        clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
+        clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
+        role,
+        scopes,
+        signedAtMs,
+        token: authToken ?? null,
+        nonce,
+      });
+      const signature = await signDevicePayload(deviceIdentity.privateKey, payload);
+      device = {
+        id: deviceIdentity.deviceId,
+        publicKey: deviceIdentity.publicKey,
+        signature,
+        signedAt: signedAtMs,
+        nonce,
+      };
+    }
+    const params = {
+      minProtocol: 3,
+      maxProtocol: 3,
+      client: {
+        id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
+        version: this.opts.clientVersion ?? "dev",
+        platform: this.opts.platform ?? navigator.platform ?? "web",
+        mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
+        instanceId: this.opts.instanceId,
+      },
+      role,
+      scopes,
+      device,
+      caps: [],
+      auth,
+      userAgent: navigator.userAgent,
+      locale: navigator.language,
+    };
+
+    void this.request<GatewayHelloOk>("connect", params)
+      .then((hello) => {
+        if (hello?.auth?.deviceToken && deviceIdentity) {
+          storeDeviceAuthToken({
+            deviceId: deviceIdentity.deviceId,
+            role: hello.auth.role ?? role,
+            token: hello.auth.deviceToken,
+            scopes: hello.auth.scopes ?? [],
+          });
+        }
+        this.backoffMs = 800;
+        this.opts.onHello?.(hello);
+      })
+      .catch(() => {
+        if (canFallbackToShared && deviceIdentity) {
+          clearDeviceAuthToken({ deviceId: deviceIdentity.deviceId, role });
+        }
+        this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect failed");
+      });
+  }
+
+  private handleMessage(raw: string) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return;
+    }
+
+    const frame = parsed as { type?: unknown };
+    if (frame.type === "event") {
+      const evt = parsed as GatewayEventFrame;
+      if (evt.event === "connect.challenge") {
+        const payload = evt.payload as { nonce?: unknown } | undefined;
+        const nonce = payload && typeof payload.nonce === "string" ? payload.nonce : null;
+        if (nonce) {
+          this.connectNonce = nonce;
+          void this.sendConnect();
+        }
+        return;
       }
-    } catch (err) {
-      console.error("Failed to parse gateway message:", err);
+      const seq = typeof evt.seq === "number" ? evt.seq : null;
+      if (seq !== null) {
+        if (this.lastSeq !== null && seq > this.lastSeq + 1) {
+          this.opts.onGap?.({ expected: this.lastSeq + 1, received: seq });
+        }
+        this.lastSeq = seq;
+      }
+      try {
+        this.opts.onEvent?.(evt);
+      } catch (err) {
+        console.error("[gateway] event handler error:", err);
+      }
+      return;
+    }
+
+    if (frame.type === "res") {
+      const res = parsed as GatewayResponseFrame;
+      const pending = this.pending.get(res.id);
+      if (!pending) {
+        return;
+      }
+      this.pending.delete(res.id);
+      if (res.ok) {
+        pending.resolve(res.payload);
+      } else {
+        pending.reject(new Error(res.error?.message ?? "request failed"));
+      }
+      return;
     }
   }
 
-  async call(method: string, params?: unknown): Promise<unknown> {
-    if (!this.connected) {
-      throw new Error("Gateway not connected");
+  request<T = unknown>(method: string, params?: unknown): Promise<T> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error("gateway not connected"));
     }
-
-    const id = String(++this.requestId);
-    const request = {
-      jsonrpc: "2.0",
-      id,
-      method,
-      params: params || {},
-    };
-
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-
-      try {
-        this.ws!.send(JSON.stringify(request));
-      } catch (err) {
-        this.pending.delete(id);
-        reject(err);
-      }
-
-      // Timeout after 30 seconds
-      setTimeout(() => {
-        if (this.pending.has(id)) {
-          this.pending.delete(id);
-          reject(new Error("Request timeout"));
-        }
-      }, 30000);
+    const id = generateUUID();
+    const frame = { type: "req", id, method, params };
+    const p = new Promise<T>((resolve, reject) => {
+      this.pending.set(id, { resolve: (v) => resolve(v as T), reject });
     });
+    this.ws.send(JSON.stringify(frame));
+    return p;
+  }
+
+  private queueConnect() {
+    this.connectNonce = null;
+    this.connectSent = false;
+    if (this.connectTimer !== null) {
+      window.clearTimeout(this.connectTimer);
+    }
+    this.connectTimer = window.setTimeout(() => {
+      void this.sendConnect();
+    }, 750);
   }
 }

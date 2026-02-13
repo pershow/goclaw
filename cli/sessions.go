@@ -10,6 +10,8 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/smallnest/goclaw/config"
+	"github.com/smallnest/goclaw/internal"
 	"github.com/smallnest/goclaw/session"
 	"github.com/spf13/cobra"
 )
@@ -58,26 +60,25 @@ type SessionInfo struct {
 
 // runSessionsList lists all sessions
 func runSessionsList(cmd *cobra.Command, args []string) {
-	// Determine sessions directory
-	var sessionDir string
-	var err error
-
+	// Determine sessions directory（与 status/start 一致）
+	sessionDir := filepath.Join(internal.GetGoclawDir(), "sessions")
+	cfg, _ := config.Load("")
 	if sessionsListStore != "" {
 		sessionDir = sessionsListStore
-	} else {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error getting home directory: %v\n", err)
-			os.Exit(1)
-		}
-		sessionDir = filepath.Join(homeDir, ".goclaw", "sessions")
+	} else if cfg != nil && cfg.Session.Store != "" {
+		sessionDir = cfg.Session.Store
 	}
 
-	// Create session manager
 	sessionMgr, err := session.NewManager(sessionDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating session manager: %v\n", err)
 		os.Exit(1)
+	}
+	if cfg != nil && cfg.Session.Reset != nil {
+		p := session.ToResetPolicy(&session.SessionResetConfigLike{
+			Mode: cfg.Session.Reset.Mode, AtHour: cfg.Session.Reset.AtHour, IdleMinutes: cfg.Session.Reset.IdleMinutes,
+		})
+		sessionMgr.SetResetPolicy(&p)
 	}
 
 	// List sessions

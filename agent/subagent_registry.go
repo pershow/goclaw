@@ -14,10 +14,17 @@ import (
 	"go.uber.org/zap"
 )
 
+// Artifact 子 Agent 完成时可选携带的产物（与 OpenClaw artifacts 对齐）
+type Artifact struct {
+	Type    string `json:"type"`              // 类型，如 file, summary, link
+	Payload string `json:"payload,omitempty"`  // 内容或路径
+}
+
 // SubagentRunOutcome 分身运行结果
 type SubagentRunOutcome struct {
-	Status string `json:"status"` // ok, error, timeout, unknown
-	Error  string `json:"error,omitempty"`
+	Status    string     `json:"status"`    // ok, error, timeout, unknown
+	Error     string     `json:"error,omitempty"`
+	Artifacts []Artifact `json:"artifacts,omitempty"` // 可选产物列表
 }
 
 // DeliveryContext 传递上下文
@@ -42,6 +49,7 @@ type SubagentRunRecord struct {
 	StartedAt           *int64              `json:"started_at,omitempty"`
 	EndedAt             *int64              `json:"ended_at,omitempty"`
 	Outcome             *SubagentRunOutcome `json:"outcome,omitempty"`
+	Artifacts           []Artifact          `json:"artifacts,omitempty"` // 可选产物，与 Outcome.Artifacts 一致
 	ArchiveAtMs         *int64              `json:"archive_at_ms,omitempty"`
 	CleanupCompletedAt  *int64              `json:"cleanup_completed_at,omitempty"`
 	CleanupHandled      bool                `json:"cleanup_handled"`
@@ -169,6 +177,9 @@ func (r *SubagentRegistry) MarkCompleted(runID string, outcome *SubagentRunOutco
 
 	record.EndedAt = endedAt
 	record.Outcome = outcome
+	if outcome != nil && len(outcome.Artifacts) > 0 {
+		record.Artifacts = outcome.Artifacts
+	}
 
 	// 保存到磁盘
 	if err := r.saveToDisk(); err != nil {

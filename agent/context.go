@@ -3,10 +3,12 @@ package agent
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
+	"github.com/smallnest/goclaw/internal"
 	"github.com/smallnest/goclaw/internal/logger"
 	"github.com/smallnest/goclaw/session"
 	"go.uber.org/zap"
@@ -125,6 +127,10 @@ func (b *ContextBuilder) buildIdentityAndTools() string {
 		"web_search":             "Search the web using API",
 		"web_fetch":              "Fetch web pages",
 		"use_skill":              "Load a specialized skill. SKILLS HAVE HIGHEST PRIORITY - always check Skills section first before using other tools",
+		"sessions_list":         "List session keys for the agent",
+		"sessions_history":      "Get recent messages for a session by session_key",
+		"sessions_send":         "Send a message to a session by session_key",
+		"session_status":        "Get status (message count, updated_at) for a session",
 	}
 
 	// 构建工具列表
@@ -133,6 +139,7 @@ func (b *ContextBuilder) buildIdentityAndTools() string {
 		"browser_click", "browser_fill_input", "browser_execute_script",
 		"read_file", "write_file", "list_files", "run_shell",
 		"web_search", "web_fetch", "use_skill",
+		"sessions_list", "sessions_history", "sessions_send", "session_status",
 	}
 
 	var toolLines []string
@@ -326,12 +333,22 @@ When encountering errors, follow this retry hierarchy:
 ✅ "Found a way to proceed..."`
 }
 
-// buildWorkspace 构建工作区信息
+// buildWorkspace 构建工作区信息（含 GoClaw 配置/数据路径，便于 agent 回答“配置文件在哪”等）
 func (b *ContextBuilder) buildWorkspace() string {
+	goclawDir := internal.GetGoclawDir()
+	configPath := internal.GetConfigPath()
+	memoryDir := internal.GetMemoryDir()
+	sessionDir := filepath.Join(goclawDir, "sessions")
 	return fmt.Sprintf(`## Workspace
 
 Your working directory is: %s
-Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.`, b.workspace)
+Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.
+
+GoClaw paths (use when asked about config, sessions, or memory):
+- Config file: %s
+- Data dir: %s
+- Default session dir: %s
+- Memory dir: %s`, b.workspace, configPath, goclawDir, sessionDir, memoryDir)
 }
 
 // buildRuntime 构建运行时信息

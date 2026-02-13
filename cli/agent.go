@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/smallnest/goclaw/agent"
 	"github.com/smallnest/goclaw/agent/tools"
 	"github.com/smallnest/goclaw/bus"
 	"github.com/smallnest/goclaw/config"
+	"github.com/smallnest/goclaw/internal"
 	"github.com/smallnest/goclaw/internal/logger"
 	"github.com/smallnest/goclaw/providers"
 	"github.com/smallnest/goclaw/session"
@@ -62,9 +64,10 @@ func runAgent(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Initialize logger if verbose or thinking mode is enabled
+	// Initialize logger if verbose or thinking mode is enabled（同时写入日志文件）
 	if agentVerbose || agentThinking {
-		if err := logger.Init("debug", false); err != nil {
+		logPath := filepath.Join(internal.GetGoclawDir(), "logs", "goclaw.log")
+		if err := logger.InitWithFile("debug", false, logPath); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
 			os.Exit(1)
 		}
@@ -89,12 +92,21 @@ func runAgent(cmd *cobra.Command, args []string) {
 	messageBus := bus.NewMessageBus(100)
 	defer messageBus.Close()
 
-	// Create session manager
-	sessionDir := os.Getenv("HOME") + "/.goclaw/sessions"
+	// Create session manager（与 start/status 一致，Windows 兼容）
+	sessionDir := filepath.Join(internal.GetGoclawDir(), "sessions")
+	if cfg.Session.Store != "" {
+		sessionDir = cfg.Session.Store
+	}
 	sessionMgr, err := session.NewManager(sessionDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create session manager: %v\n", err)
 		os.Exit(1)
+	}
+	if cfg.Session.Reset != nil {
+		p := session.ToResetPolicy(&session.SessionResetConfigLike{
+			Mode: cfg.Session.Reset.Mode, AtHour: cfg.Session.Reset.AtHour, IdleMinutes: cfg.Session.Reset.IdleMinutes,
+		})
+		sessionMgr.SetResetPolicy(&p)
 	}
 
 	// Create memory store

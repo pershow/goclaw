@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -41,10 +44,12 @@ type Server struct {
 	handler       *Handler
 	mu            sync.RWMutex
 	running       bool
-	connections   map[string]*Connection
-	connectionsMu sync.RWMutex
-	enableAuth    bool
-	authToken     string
+	connections     map[string]*Connection
+	connectionsMu   sync.RWMutex
+	enableAuth      bool
+	authToken       string
+	broadcastSeq    atomic.Uint64
+	lastHeartbeatMs atomic.Int64
 }
 
 // WebSocketConfig WebSocket 配置
@@ -128,6 +133,11 @@ func (s *Server) SetWebSocketConfig(cfg *WebSocketConfig) {
 	s.authToken = cfg.AuthToken
 }
 
+// SetSessionResetPolicy 设置会话重置策略（与 OpenClaw 对齐）；由调用方根据 config.session.reset 注入
+func (s *Server) SetSessionResetPolicy(policy *session.ResetPolicy) {
+	s.handler.SetSessionResetPolicy(policy)
+}
+
 // Start 启动服务器
 func (s *Server) Start(ctx context.Context) error {
 	s.mu.Lock()
@@ -137,6 +147,11 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	s.running = true
 	s.mu.Unlock()
+
+	s.lastHeartbeatMs.Store(time.Now().UnixMilli())
+	// 注入 presence 与 lastHeartbeat 供 RPC 使用
+	s.handler.SetPresenceProvider(s)
+	s.handler.SetLastHeartbeat(func() int64 { return s.lastHeartbeatMs.Load() })
 
 	// 启动 HTTP 服务器
 	if err := s.startHTTPServer(ctx); err != nil {
@@ -328,6 +343,25 @@ func (s *Server) IsRunning() bool {
 	return s.running
 }
 
+// Handler 返回网关处理器（用于注入 presence/heartbeat）
+func (s *Server) Handler() *Handler {
+	return s.handler
+}
+
+// GetPresenceEntries 返回当前连接的 presence 列表，供 system-presence RPC 使用
+func (s *Server) GetPresenceEntries() []map[string]interface{} {
+	s.connectionsMu.RLock()
+	defer s.connectionsMu.RUnlock()
+	entries := make([]map[string]interface{}, 0, len(s.connections))
+	for _, c := range s.connections {
+		entries = append(entries, map[string]interface{}{
+			"id":           c.ID,
+			"connectedAtMs": c.CreatedAt.UnixMilli(),
+		})
+	}
+	return entries
+}
+
 // handleHealth 健康检查处理器
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -438,24 +472,24 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 创建连接对象
+	// 创建连接对象（仅生成连接 ID，不创建聊天会话；聊天会话由前端 sessionKey + chat.send/chat.history 触发 GetOrCreate）
 	connection := NewConnection(conn, s.wsConfig)
-	sessionID := connection.ID
+	connectionID := connection.ID
 
 	// 添加到连接管理
 	s.addConnection(connection)
 
 	logger.Info("WebSocket connection established",
-		zap.String("session_id", sessionID),
+		zap.String("connection_id", connectionID),
 		zap.String("remote_addr", r.RemoteAddr),
 	)
 
-	// 发送欢迎消息
+	// 发送欢迎消息（Params 中 session_id 为连接标识，与聊天 sessionKey 无关，保留字段名兼容前端）
 	welcome := JSONRPCRequest{
 		JSONRPC: "2.0",
 		Method:  "connected",
 		Params: map[string]interface{}{
-			"session_id": sessionID,
+			"session_id": connectionID,
 			"version":    ProtocolVersion,
 		},
 	}
@@ -491,13 +525,13 @@ func (s *Server) authenticateWebSocket(r *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(token), []byte(s.authToken)) == 1
 }
 
-// handleWebSocketMessages 处理 WebSocket 消息
+// handleWebSocketMessages 处理 WebSocket 消息（conn.ID 为连接 ID，与聊天 sessionKey 无关）
 func (s *Server) handleWebSocketMessages(conn *Connection) {
 	defer func() {
 		conn.Close()
 		s.removeConnection(conn.ID)
 		logger.Info("WebSocket connection closed",
-			zap.String("session_id", conn.ID),
+			zap.String("connection_id", conn.ID),
 		)
 	}()
 
@@ -506,7 +540,7 @@ func (s *Server) handleWebSocketMessages(conn *Connection) {
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
 				logger.Error("WebSocket error",
-					zap.String("session_id", conn.ID),
+					zap.String("connection_id", conn.ID),
 					zap.Error(err))
 			}
 			break
@@ -517,32 +551,64 @@ func (s *Server) handleWebSocketMessages(conn *Connection) {
 			continue
 		}
 
-		// 解析请求
-		req, err := ParseRequest(data)
+		// 解析请求（支持前端 type:"req" 与 JSON-RPC 2.0）
+		req, err := ParseGatewayRequest(data)
 		if err != nil {
 			logger.Error("Failed to parse WebSocket message",
-				zap.String("session_id", conn.ID),
+				zap.String("connection_id", conn.ID),
 				zap.Error(err))
-			errorResp := NewErrorResponse("", ErrorParseError, "Parse error")
+			errorResp := NewGatewayErrorFrame("", "PARSE_ERROR", "Parse error", nil)
 			_ = conn.SendJSON(errorResp)
 			continue
 		}
 
 		logger.Debug("WebSocket request",
-			zap.String("session_id", conn.ID),
+			zap.String("connection_id", conn.ID),
 			zap.String("method", req.Method),
 		)
 
+		s.lastHeartbeatMs.Store(time.Now().UnixMilli())
 		// 处理请求
 		resp := s.handler.HandleRequest(conn.ID, req)
 
-		// 发送响应
-		if err := conn.SendJSON(resp); err != nil {
+		// 转为前端期望的 type:"res" 帧并发送
+		var frame *GatewayResponseFrame
+		if resp.Error != nil {
+			code := "INTERNAL_ERROR"
+			switch resp.Error.Code {
+			case ErrorMethodNotFound:
+				code = "METHOD_NOT_FOUND"
+			case ErrorInvalidParams:
+				code = "INVALID_PARAMS"
+			case ErrorInvalidRequest:
+				code = "INVALID_REQUEST"
+			}
+			frame = NewGatewayErrorFrame(req.ID, code, resp.Error.Message, nil)
+		} else {
+			frame = NewGatewaySuccess(req.ID, resp.Result)
+		}
+		if err := conn.SendJSON(frame); err != nil {
 			logger.Error("Failed to send WebSocket response",
-				zap.String("session_id", conn.ID),
+				zap.String("connection_id", conn.ID),
 				zap.Error(err))
 		}
 	}
+}
+
+// canonicalSessionKeyForBroadcast 将 ChatID 转为与 connect snapshot 一致的 sessionKey（agent_*_* -> agent:*:*），便于前端 sessionKeyMatch
+func canonicalSessionKeyForBroadcast(chatID string) string {
+	s := strings.TrimSpace(chatID)
+	if s == "" {
+		return s
+	}
+	// agent_<id>_<mainKey>（磁盘 safeKey）-> agent:id:mainKey，与 buildConnectSnapshot 的 mainSessionKey 一致
+	if ok, _ := regexp.MatchString(`^agent_[^_]+_[^_]+$`, s); ok {
+		parts := strings.SplitN(s, "_", 3) // ["agent", "main", "main"]
+		if len(parts) == 3 {
+			return parts[0] + ":" + parts[1] + ":" + parts[2]
+		}
+	}
+	return s
 }
 
 // broadcastOutbound 广播出站消息到所有 WebSocket 连接
@@ -572,28 +638,65 @@ func (s *Server) broadcastOutbound(ctx context.Context) {
 				continue
 			}
 
-			logger.Debug("Broadcasting to WebSocket connections",
-				zap.Int("connections", len(s.connections)))
+			// 仅对 websocket 通道广播到 Control UI；其他通道由 channels.Manager 投递
+			if msg.Channel != "websocket" {
+				continue
+			}
 
-			// 广播到所有连接
+			s.connectionsMu.RLock()
+			connCount := len(s.connections)
+			s.connectionsMu.RUnlock()
+
+			seq := s.broadcastSeq.Add(1)
+			tsMs := msg.Timestamp.UnixMilli()
+			if tsMs == 0 {
+				tsMs = time.Now().UnixMilli()
+			}
+			// 与 OpenClaw 一致：runId、sessionKey、seq、state、message（含 timestamp）；sessionKey 使用规范形式 agent:id:main 便于前端匹配
+			sessionKey := canonicalSessionKeyForBroadcast(msg.ChatID)
+
+			// 根据是否为流式消息设置 state
+			state := "final"
+			if msg.IsStream {
+				state = "delta" // 前端期望 "delta" 表示流式增量
+			}
+
+			logger.Info("Broadcasting chat event to WebSocket",
+				zap.String("chat_id", msg.ChatID),
+				zap.String("state", state),
+				zap.Int("content_length", len(msg.Content)),
+				zap.Int("connections", connCount))
+
+			payload := map[string]interface{}{
+				"runId":      msg.ID,
+				"sessionKey": sessionKey,
+				"seq":        seq,
+				"state":      state,
+				"message": map[string]interface{}{
+					"role": "assistant",
+					"content": []map[string]interface{}{
+						{"type": "text", "text": msg.Content},
+					},
+					"timestamp": tsMs,
+				},
+			}
+			eventFrame := map[string]interface{}{
+				"type":    "event",
+				"event":  "chat",
+				"payload": payload,
+				"seq":     seq,
+			}
+			notif, err := json.Marshal(eventFrame)
+			if err != nil {
+				logger.Error("Failed to marshal chat event", zap.Error(err))
+				continue
+			}
+
 			s.connectionsMu.RLock()
 			for _, conn := range s.connections {
-				// 创建通知
-				notif, err := s.handler.BroadcastNotification("message.outbound", map[string]interface{}{
-					"channel":   msg.Channel,
-					"chat_id":   msg.ChatID,
-					"content":   msg.Content,
-					"timestamp": msg.Timestamp,
-				})
-				if err != nil {
-					logger.Error("Failed to create notification", zap.Error(err))
-					continue
-				}
-
-				// 发送通知
 				if err := conn.SendMessage(websocket.TextMessage, notif); err != nil {
-					logger.Error("Failed to broadcast notification",
-						zap.String("session_id", conn.ID),
+					logger.Error("Failed to broadcast chat event",
+						zap.String("connection_id", conn.ID),
 						zap.Error(err))
 				}
 			}
@@ -605,7 +708,8 @@ func (s *Server) broadcastOutbound(ctx context.Context) {
 // Connection WebSocket 连接
 type Connection struct {
 	*websocket.Conn
-	ID string
+	ID        string
+	CreatedAt time.Time
 	// nolint:unused
 	_sessionID   string // 保留供将来使用
 	pingInterval time.Duration
@@ -618,6 +722,7 @@ func NewConnection(ws *websocket.Conn, cfg *WebSocketConfig) *Connection {
 	return &Connection{
 		Conn:         ws,
 		ID:           uuid.New().String(),
+		CreatedAt:    time.Now(),
 		pingInterval: cfg.PingInterval,
 		pongTimeout:  cfg.PongTimeout,
 	}
@@ -628,6 +733,10 @@ func (c *Connection) SendJSON(v interface{}) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// 每次写入前重新设置写入超时
+	if err := c.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		return err
+	}
 	return c.WriteJSON(v)
 }
 
@@ -636,6 +745,10 @@ func (c *Connection) SendMessage(messageType int, data []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// 每次写入前重新设置写入超时，避免之前的 deadline 导致超时
+	if err := c.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		return err
+	}
 	return c.WriteMessage(messageType, data)
 }
 

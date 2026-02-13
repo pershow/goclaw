@@ -257,6 +257,15 @@ func (p *RotationProvider) Close() error {
 	return nil
 }
 
+// SupportsStreaming returns whether the current profile supports streaming.
+func (p *RotationProvider) SupportsStreaming() bool {
+	profile := p.getNextProfile()
+	if profile == nil {
+		return false
+	}
+	return profile.Provider.SupportsStreaming()
+}
+
 // ListProfiles 列出所有配置
 func (p *RotationProvider) ListProfiles() []string {
 	p.mu.RLock()

@@ -17,6 +17,7 @@ import (
 // Agent represents the main AI agent
 // New implementation inspired by pi-mono architecture
 type Agent struct {
+	id           string // Agent ID，与 session key 中的 agentId 对应
 	orchestrator *Orchestrator
 	bus          *bus.MessageBus
 	provider     providers.Provider
@@ -34,6 +35,7 @@ type Agent struct {
 
 // NewAgentConfig configures the agent
 type NewAgentConfig struct {
+	ID           string // Agent ID，与 session key 中的 agentId 对应
 	Bus          *bus.MessageBus
 	Provider     providers.Provider
 	SessionMgr   *session.Manager
@@ -45,6 +47,11 @@ type NewAgentConfig struct {
 	Temperature  float64 // 0 表示使用 provider 默认
 	MaxTokens    int     // 0 表示使用 provider 默认
 	SkillsLoader *SkillsLoader
+
+	// 上下文窗口与压缩（0 表示使用默认）
+	ContextWindowTokens int // 来自配置 agents.defaults.context_tokens 或 profile
+	ReserveTokens       int // 保留 token 数，默认 4096
+	MaxHistoryTurns     int // 最多保留的 user 轮次，0 表示不限制
 }
 
 // NewAgent creates a new agent
@@ -78,18 +85,21 @@ func NewAgent(cfg *NewAgentConfig) (*Agent, error) {
 	}
 
 	loopConfig := &LoopConfig{
-		Model:            state.Model,
-		Provider:         cfg.Provider,
-		SessionMgr:       cfg.SessionMgr,
-		MaxIterations:    cfg.MaxIteration,
-		Temperature:      cfg.Temperature,
-		MaxTokens:        cfg.MaxTokens,
-		ConvertToLLM:     defaultConvertToLLM,
-		TransformContext: nil,
-		Skills:           skills,
-		LoadedSkills:     state.LoadedSkills,
-		ContextBuilder:   cfg.Context,
-		GetSteeringMessages: func() ([]AgentMessage, error) {
+		Model:                state.Model,
+		Provider:             cfg.Provider,
+		SessionMgr:           cfg.SessionMgr,
+		MaxIterations:        cfg.MaxIteration,
+		Temperature:          cfg.Temperature,
+		MaxTokens:            cfg.MaxTokens,
+		ContextWindowTokens:  cfg.ContextWindowTokens,
+		ReserveTokens:        cfg.ReserveTokens,
+		MaxHistoryTurns:      cfg.MaxHistoryTurns,
+		ConvertToLLM:         defaultConvertToLLM,
+		TransformContext:     nil,
+		Skills:               skills,
+		LoadedSkills:         state.LoadedSkills,
+		ContextBuilder:       cfg.Context,
+		GetSteeringMessages:  func() ([]AgentMessage, error) {
 			state := state // Capture state
 			return state.DequeueSteeringMessages(), nil
 		},
@@ -101,7 +111,14 @@ func NewAgent(cfg *NewAgentConfig) (*Agent, error) {
 
 	orchestrator := NewOrchestrator(loopConfig, state)
 
+	// 设置 agent ID，默认为 "main"
+	agentID := cfg.ID
+	if agentID == "" {
+		agentID = session.DefaultAgentID
+	}
+
 	return &Agent{
+		id:           agentID,
 		orchestrator: orchestrator,
 		bus:          cfg.Bus,
 		provider:     cfg.Provider,
@@ -131,8 +148,9 @@ func (a *Agent) Start(ctx context.Context) error {
 	// Start event dispatcher
 	go a.dispatchEvents(ctx)
 
-	// Start message processor
-	go a.processMessages(ctx)
+	// 注意：不再启动 processMessages
+	// 消息路由由 AgentManager.processMessages 统一处理，通过 RouteInbound 分发到各个 Agent
+	// Agent 通过 HandleMessage 方法接收消息，而不是自己消费 bus
 
 	return nil
 }
@@ -146,6 +164,11 @@ func (a *Agent) Stop() error {
 	logger.Info("Stopping agent")
 	a.orchestrator.Stop()
 	return nil
+}
+
+// GetID returns the agent ID
+func (a *Agent) GetID() string {
+	return a.id
 }
 
 // Prompt sends a user message to the agent
@@ -212,13 +235,40 @@ func (a *Agent) handleInboundMessage(ctx context.Context, msg *bus.InboundMessag
 		zap.String("chat_id", msg.ChatID),
 	)
 
-	// Generate fresh session key with timestamp for new sessions
-	sessionKey := msg.SessionKey()
-	if msg.ChatID == "default" || msg.ChatID == "" {
-		// For CLI/default chat, always create a fresh session with timestamp
-		sessionKey = fmt.Sprintf("%s:%d", msg.Channel, time.Now().Unix())
-		logger.Info("Creating fresh session", zap.String("session_key", sessionKey))
+	// 获取 agent ID
+	agentID := a.id
+	if agentID == "" {
+		agentID = session.DefaultAgentID
 	}
+
+	// 获取 mainKey（默认为 "main"）
+	mainKey := session.DefaultMainKey
+
+	// 生成会话键（与 OpenClaw 对齐：所有 session key 都以 agent:<agentId>: 开头）
+	var sessionKey string
+	if msg.Channel == "websocket" {
+		// Web 控制台：
+		// - 如果 chatID 已经是 agent:xxx:xxx 格式，直接使用
+		// - 否则使用主会话 key
+		if session.IsAgentSessionKey(msg.ChatID) {
+			sessionKey = msg.ChatID
+		} else {
+			sessionKey = session.BuildAgentMainSessionKey(agentID, mainKey)
+		}
+	} else if msg.ChatID == "default" || msg.ChatID == "" {
+		// CLI/default 场景：使用主会话
+		sessionKey = session.BuildAgentMainSessionKey(agentID, mainKey)
+		logger.Info("Using main session for default chat", zap.String("session_key", sessionKey))
+	} else {
+		// 其他渠道：根据是否为群组决定 session key
+		isGroup := session.IsGroupSessionKey(msg.ChatID) || strings.Contains(strings.ToLower(msg.ChatID), "group")
+		sessionKey = session.BuildAgentSessionKey(agentID, msg.Channel, msg.AccountID, msg.ChatID, mainKey, isGroup)
+	}
+
+	logger.Info("Resolved session key",
+		zap.String("original_chat_id", msg.ChatID),
+		zap.String("session_key", sessionKey),
+		zap.String("agent_id", agentID))
 
 	// Get or create session
 	sess, err := a.sessionMgr.GetOrCreate(sessionKey)
@@ -252,7 +302,7 @@ func (a *Agent) handleInboundMessage(ctx context.Context, msg *bus.InboundMessag
 		logger.Error("Agent execution failed", zap.Error(err))
 
 		// Send error response
-		a.publishError(ctx, msg.Channel, msg.ChatID, err)
+		a.publishError(ctx, msg.Channel, msg.ChatID, msg.ID, err)
 		return
 	}
 
@@ -263,7 +313,7 @@ func (a *Agent) handleInboundMessage(ctx context.Context, msg *bus.InboundMessag
 	if len(finalMessages) > 0 {
 		lastMsg := finalMessages[len(finalMessages)-1]
 		if lastMsg.Role == RoleAssistant {
-			a.publishToBus(ctx, msg.Channel, msg.ChatID, lastMsg)
+			a.publishToBus(ctx, msg.Channel, msg.ChatID, msg.ID, lastMsg)
 		}
 	}
 }
@@ -335,10 +385,11 @@ func (a *Agent) publishResponse(ctx context.Context, msg AgentMessage) {
 }
 
 // publishError publishes an error message
-func (a *Agent) publishError(ctx context.Context, channel, chatID string, err error) {
+func (a *Agent) publishError(ctx context.Context, channel, chatID, runID string, err error) {
 	errorMsg := fmt.Sprintf("An error occurred: %v", err)
 
 	outbound := &bus.OutboundMessage{
+		ID:        runID, // 保留原始 runId，确保前端能匹配
 		Channel:   channel,
 		ChatID:    chatID,
 		Content:   errorMsg,
@@ -349,10 +400,11 @@ func (a *Agent) publishError(ctx context.Context, channel, chatID string, err er
 }
 
 // publishToBus publishes a message to the bus
-func (a *Agent) publishToBus(ctx context.Context, channel, chatID string, msg AgentMessage) {
+func (a *Agent) publishToBus(ctx context.Context, channel, chatID, runID string, msg AgentMessage) {
 	content := extractTextContent(msg)
 
 	outbound := &bus.OutboundMessage{
+		ID:        runID, // 保留原始 runId，确保前端能匹配
 		Channel:   channel,
 		ChatID:    chatID,
 		Content:   content,

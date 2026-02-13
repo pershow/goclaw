@@ -122,6 +122,7 @@ const (
 	EventTurnEnd             EventType = "turn_end"
 	EventMessageStart        EventType = "message_start"
 	EventMessageUpdate       EventType = "message_update"
+	EventMessageDelta        EventType = "message_delta" // 流式输出的增量内容
 	EventMessageEnd          EventType = "message_end"
 	EventToolExecutionStart  EventType = "tool_execution_start"
 	EventToolExecutionUpdate EventType = "tool_execution_update"
@@ -132,6 +133,7 @@ const (
 type Event struct {
 	Type      EventType `json:"type"`
 	Message   *Message  `json:"message,omitempty"`
+	Content   string    `json:"content,omitempty"` // 流式输出的增量内容
 	Timestamp int64     `json:"timestamp"`
 	// Tool execution fields
 	ToolID     string         `json:"tool_id,omitempty"`
@@ -155,6 +157,11 @@ type LoopConfig struct {
 	// LLM 调用参数（0 表示使用 provider 默认）
 	Temperature float64
 	MaxTokens   int
+
+	// 上下文窗口与压缩（0 表示使用默认）
+	ContextWindowTokens int // 模型上下文窗口 token 数
+	ReserveTokens       int // 保留给系统提示与回复的 token 数
+	MaxHistoryTurns     int // 发送给 LLM 时最多保留的 user 轮次数，0 表示不限制
 
 	// Hooks for message transformation
 	ConvertToLLM     func([]AgentMessage) ([]providers.Message, error)
@@ -330,5 +337,11 @@ func (e *Event) WithStopReason(reason string) *Event {
 // WithFinalMessages adds final messages to the event
 func (e *Event) WithFinalMessages(msgs []AgentMessage) *Event {
 	e.FinalMessages = msgs
+	return e
+}
+
+// WithContent adds streaming content delta to the event
+func (e *Event) WithContent(content string) *Event {
+	e.Content = content
 	return e
 }

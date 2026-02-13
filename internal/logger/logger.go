@@ -2,6 +2,7 @@ package logger
 
 import (
 	"os"
+	"path/filepath"
 	"sync"
 
 	"go.uber.org/zap"
@@ -16,18 +17,24 @@ var (
 	initialized bool
 )
 
-// Init 初始化日志 (线程安全)
+// Init 初始化日志 (线程安全)，仅输出到 stdout/stderr
 // 注意：多次调用 Init 只有第一次调用会真正初始化，后续调用会被忽略
 func Init(level string, development bool) error {
+	return InitWithFile(level, development, "")
+}
+
+// InitWithFile 初始化日志并可选写入文件 (线程安全)
+// logFile 为空则只写 stdout/stderr；非空则同时写入该文件（自动创建目录）
+func InitWithFile(level string, development bool, logFile string) error {
 	var initErr error
 	once.Do(func() {
-		initErr = doInit(level, development)
+		initErr = doInit(level, development, logFile)
 	})
 	return initErr
 }
 
 // doInit 执行实际的日志初始化
-func doInit(level string, development bool) error {
+func doInit(level string, development bool, logFile string) error {
 	// 解析日志级别
 	var zapLevel zapcore.Level
 	switch level {
@@ -41,6 +48,16 @@ func doInit(level string, development bool) error {
 		zapLevel = zapcore.ErrorLevel
 	default:
 		zapLevel = zapcore.InfoLevel
+	}
+
+	outputPaths := []string{"stdout"}
+	errorOutputPaths := []string{"stderr"}
+	if logFile != "" {
+		if err := os.MkdirAll(filepath.Dir(logFile), 0755); err != nil {
+			return err
+		}
+		outputPaths = append(outputPaths, logFile)
+		errorOutputPaths = append(errorOutputPaths, logFile)
 	}
 
 	// 配置
@@ -62,8 +79,8 @@ func doInit(level string, development bool) error {
 			EncodeDuration: zapcore.StringDurationEncoder,
 			EncodeCaller:   zapcore.ShortCallerEncoder,
 		},
-		OutputPaths:      []string{"stdout"},
-		ErrorOutputPaths: []string{"stderr"},
+		OutputPaths:      outputPaths,
+		ErrorOutputPaths: errorOutputPaths,
 	}
 
 	// 创建 logger

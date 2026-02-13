@@ -98,8 +98,52 @@ func (o *Orchestrator) runLoop(ctx context.Context, state *AgentState) ([]AgentM
 				pendingMessages = []AgentMessage{}
 			}
 
-			// Stream assistant response
-			assistantMsg, err := o.streamAssistantResponse(ctx, state)
+			// Stream assistant response（上下文溢出时先截断历史重试，再可选做 LLM 摘要压缩后重试，与 OpenClaw 方案 B 对齐）
+			var assistantMsg AgentMessage
+			var err error
+			const maxContextOverflowRetries = 2 // 0=正常 1=截断 2=摘要压缩
+			retryTurns := 5
+			contextWindow := o.config.ContextWindowTokens
+			if contextWindow <= 0 {
+				contextWindow = DefaultContextWindowTokens
+			}
+			reserve := EffectiveReserveTokens(o.config.ReserveTokens)
+			summarizeFunc := func(ctx context.Context, prompt string) (string, error) {
+				msgs := []providers.Message{
+					{Role: "system", Content: "You are a summarizer. Output a concise summary of the following conversation. Preserve key decisions, TODOs, and constraints. Output only the summary, no preamble."},
+					{Role: "user", Content: prompt},
+				}
+				resp, callErr := o.config.Provider.Chat(ctx, msgs, nil)
+				if callErr != nil {
+					return "", callErr
+				}
+				return resp.Content, nil
+			}
+			for attempt := 0; attempt <= maxContextOverflowRetries; attempt++ {
+				assistantMsg, err = o.streamAssistantResponse(ctx, state)
+				if err == nil {
+					break
+				}
+				if !IsContextOverflowError(err) {
+					break
+				}
+				if attempt == 0 {
+					logger.Warn("Context overflow, trimming history and retrying", zap.Int("attempt", 1), zap.Int("keep_turns", retryTurns))
+					state.Messages = LimitHistoryTurns(state.Messages, retryTurns)
+					continue
+				}
+				if attempt == 1 {
+					compacted, compactErr := CompactWithSummary(ctx, state.Messages, contextWindow, reserve, summarizeFunc)
+					if compactErr != nil {
+						logger.Warn("Compaction summarization failed, giving up", zap.Error(compactErr))
+						break
+					}
+					logger.Info("Context overflow, applied LLM summarization and retrying", zap.Int("messages_before", len(state.Messages)), zap.Int("messages_after", len(compacted)))
+					state.Messages = compacted
+					continue
+				}
+				break
+			}
 			if err != nil {
 				o.emitErrorEnd(state, err)
 				return state.Messages, err
@@ -169,6 +213,25 @@ func (o *Orchestrator) streamAssistantResponse(ctx context.Context, state *Agent
 		}
 	}
 
+	// Context window: trim history and truncate tool results before sending to LLM
+	contextWindow := o.config.ContextWindowTokens
+	if contextWindow <= 0 {
+		contextWindow = DefaultContextWindowTokens
+	}
+	reserve := EffectiveReserveTokens(o.config.ReserveTokens)
+	maxTurns := o.config.MaxHistoryTurns
+	if maxTurns > 0 {
+		messages = LimitHistoryTurns(messages, maxTurns)
+		logger.Info("Context: limited history turns", zap.Int("max_turns", maxTurns), zap.Int("messages_after", len(messages)))
+	}
+	messages = CopyMessagesWithTruncatedToolResults(messages, contextWindow)
+	if limit := contextWindow - reserve; limit > 0 {
+		estimated := EstimateMessagesTokens(messages)
+		if estimated > limit {
+			logger.Warn("Context: estimated tokens may exceed window", zap.Int("estimated", estimated), zap.Int("limit", limit))
+		}
+	}
+
 	// Convert to provider messages
 	var providerMsgs []providers.Message
 	if o.config.ConvertToLLM != nil {
@@ -232,10 +295,56 @@ func (o *Orchestrator) streamAssistantResponse(ctx context.Context, state *Agent
 		chatOpts = append(chatOpts, providers.WithMaxTokens(o.config.MaxTokens))
 	}
 
-	response, err := o.config.Provider.Chat(ctx, fullMessages, toolDefs, chatOpts...)
-	if err != nil {
-		logger.Error("LLM call failed", zap.Error(err))
-		return AgentMessage{}, fmt.Errorf("LLM call failed: %w", err)
+	// 检查是否支持流式输出（provider 支持且实现了 StreamingProvider 接口）
+	streamingProvider, supportsStreaming := o.config.Provider.(providers.StreamingProvider)
+	useStreaming := supportsStreaming && o.config.Provider.SupportsStreaming()
+
+	var response *providers.Response
+	var err error
+
+	if useStreaming {
+		// 使用流式 API
+		logger.Info("Using streaming API")
+		var content strings.Builder
+		var toolCalls []providers.ToolCall
+
+		err = streamingProvider.ChatStream(ctx, fullMessages, toolDefs, func(chunk providers.StreamChunk) {
+			if chunk.Error != nil {
+				logger.Error("Stream chunk error", zap.Error(chunk.Error))
+				return
+			}
+
+			// 发送流式内容事件
+			if chunk.Content != "" && !chunk.Done {
+				o.emit(NewEvent(EventMessageDelta).WithContent(chunk.Content))
+			}
+
+			// 完成时收集工具调用
+			if chunk.Done {
+				content.WriteString(chunk.Content)
+				toolCalls = chunk.ToolCalls
+			}
+		}, chatOpts...)
+
+		if err != nil {
+			logger.Error("LLM streaming call failed", zap.Error(err))
+			return AgentMessage{}, fmt.Errorf("LLM streaming call failed: %w", err)
+		}
+
+		// 构建响应
+		response = &providers.Response{
+			Content:      content.String(),
+			ToolCalls:    toolCalls,
+			FinishReason: "stop",
+		}
+	} else {
+		// 使用非流式 API
+		logger.Info("Using non-streaming API")
+		response, err = o.config.Provider.Chat(ctx, fullMessages, toolDefs, chatOpts...)
+		if err != nil {
+			logger.Error("LLM call failed", zap.Error(err))
+			return AgentMessage{}, fmt.Errorf("LLM call failed: %w", err)
+		}
 	}
 
 	logger.Info("=== LLM Response Received ===",

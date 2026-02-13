@@ -2,6 +2,8 @@ package memory
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync"
@@ -33,13 +35,11 @@ func DefaultManagerConfig(store Store, provider EmbeddingProvider) ManagerConfig
 	}
 }
 
-// NewMemoryManager creates a new memory manager
+// NewMemoryManager creates a new memory manager.
+// Provider may be nil for read-only use (e.g. status, list); AddMemory/Search will return an error if provider is nil.
 func NewMemoryManager(config ManagerConfig) (*MemoryManager, error) {
 	if config.Store == nil {
 		return nil, fmt.Errorf("store is required")
-	}
-	if config.Provider == nil {
-		return nil, fmt.Errorf("provider is required")
 	}
 
 	if config.CacheMaxSize == 0 {
@@ -55,21 +55,36 @@ func NewMemoryManager(config ManagerConfig) (*MemoryManager, error) {
 	}, nil
 }
 
-// AddMemory adds a new memory with automatic embedding generation
+// AddMemory adds a new memory with automatic embedding generation (uses embedding_cache when store supports it)
 func (m *MemoryManager) AddMemory(ctx context.Context, text string, source MemorySource, memType MemoryType, metadata MemoryMetadata) (*VectorEmbedding, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	default:
 	}
+	if m.provider == nil {
+		return nil, fmt.Errorf("embedding provider is required for AddMemory")
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Generate embedding
-	embedding, err := m.provider.Embed(text)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate embedding: %w", err)
+	contentHash := hashText(text)
+	var embedding []float32
+	if sqlStore, ok := m.store.(*SQLiteStore); ok && contentHash != "" {
+		if cached, hit := sqlStore.GetCachedEmbedding(contentHash); hit {
+			embedding = cached
+		}
+	}
+	if embedding == nil {
+		var err error
+		embedding, err = m.provider.Embed(text)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate embedding: %w", err)
+		}
+		if sqlStore, ok := m.store.(*SQLiteStore); ok && contentHash != "" {
+			_ = sqlStore.SetCachedEmbedding(contentHash, embedding)
+		}
 	}
 
 	ve := &VectorEmbedding{
@@ -86,13 +101,19 @@ func (m *MemoryManager) AddMemory(ctx context.Context, text string, source Memor
 		return nil, fmt.Errorf("failed to store memory: %w", err)
 	}
 
-	// Update cache
+	// Update in-memory cache
 	m.updateCache(ve)
 
 	return ve, nil
 }
 
-// AddMemoryBatch adds multiple memories with automatic embedding generation
+func hashText(text string) string {
+	h := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(h[:])
+}
+
+// AddMemoryBatch adds multiple memories with automatic embedding generation.
+// When provider is nil, stores text only (no vector); FTS 仍可全文检索.
 func (m *MemoryManager) AddMemoryBatch(ctx context.Context, items []MemoryItem) error {
 	select {
 	case <-ctx.Done():
@@ -103,42 +124,85 @@ func (m *MemoryManager) AddMemoryBatch(ctx context.Context, items []MemoryItem) 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Prepare texts for embedding
-	texts := make([]string, len(items))
-	for i, item := range items {
-		texts[i] = item.Text
-	}
-
-	// Generate embeddings in batch
-	embeddings, err := m.provider.EmbedBatch(texts)
-	if err != nil {
-		return fmt.Errorf("failed to generate embeddings: %w", err)
-	}
-
-	// Create VectorEmbedding objects
-	ves := make([]*VectorEmbedding, len(items))
-	for i, item := range items {
-		ves[i] = &VectorEmbedding{
-			Vector:    embeddings[i],
-			Dimension: len(embeddings[i]),
-			Text:      item.Text,
-			Source:    item.Source,
-			Type:      item.Type,
-			Metadata:  item.Metadata,
+	var ves []*VectorEmbedding
+	if m.provider == nil {
+		// 不配置 embedding 时仅存文本，供 FTS 全文检索
+		ves = make([]*VectorEmbedding, len(items))
+		for i, item := range items {
+			ves[i] = &VectorEmbedding{
+				Vector:    nil,
+				Dimension: 0,
+				Text:      item.Text,
+				Source:    item.Source,
+				Type:      item.Type,
+				Metadata:  item.Metadata,
+			}
+		}
+	} else {
+		texts := make([]string, len(items))
+		for i, item := range items {
+			texts[i] = item.Text
+		}
+		embeddings, err := m.embedBatchWithFallback(ctx, texts)
+		if err != nil {
+			return fmt.Errorf("failed to generate embeddings: %w", err)
+		}
+		ves = make([]*VectorEmbedding, len(items))
+		for i, item := range items {
+			emb := embeddings[i]
+			ves[i] = &VectorEmbedding{
+				Vector:    emb,
+				Dimension: len(emb),
+				Text:      item.Text,
+				Source:    item.Source,
+				Type:      item.Type,
+				Metadata:  item.Metadata,
+			}
 		}
 	}
 
-	// Store the memories
 	if err := m.store.AddBatch(ves); err != nil {
 		return fmt.Errorf("failed to store memories: %w", err)
 	}
-
-	// Update cache
 	for _, ve := range ves {
 		m.updateCache(ve)
 	}
-
 	return nil
+}
+
+// embedBatchWithFallback 按批调用 EmbedBatch，单批失败时回退为该批内逐条 Embed（与 OpenClaw embedChunksInBatches 对齐）
+func (m *MemoryManager) embedBatchWithFallback(ctx context.Context, texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return nil, nil
+	}
+	batchSize := m.provider.MaxBatchSize()
+	if batchSize <= 0 {
+		batchSize = 1
+	}
+	out := make([][]float32, len(texts))
+	for i := 0; i < len(texts); i += batchSize {
+		end := i + batchSize
+		if end > len(texts) {
+			end = len(texts)
+		}
+		chunk := texts[i:end]
+		embs, err := m.provider.EmbedBatch(chunk)
+		if err != nil {
+			// Fallback: embed one by one for this chunk
+			for j, t := range chunk {
+				emb, errSingle := m.provider.Embed(t)
+				if errSingle != nil {
+					return nil, fmt.Errorf("batch failed (%w) and fallback Embed at index %d failed: %w", err, i+j, errSingle)
+				}
+				out[i+j] = emb
+			}
+			continue
+		}
+		for j, e := range embs {
+			out[i+j] = e
+		}
+	}
+	return out, nil
 }
 
 // MemoryItem represents a memory to be added
@@ -149,7 +213,7 @@ type MemoryItem struct {
 	Metadata MemoryMetadata
 }
 
-// Search searches for similar memories
+// Search searches for similar memories. When provider is nil, uses FTS full-text search.
 func (m *MemoryManager) Search(ctx context.Context, query string, opts SearchOptions) ([]*SearchResult, error) {
 	select {
 	case <-ctx.Done():
@@ -159,6 +223,14 @@ func (m *MemoryManager) Search(ctx context.Context, query string, opts SearchOpt
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
+	if m.provider == nil {
+		// 不配置 embedding 时用 FTS 全文检索
+		if sqlStore, ok := m.store.(*SQLiteStore); ok {
+			return sqlStore.SearchByTextQuery(query, opts)
+		}
+		return nil, fmt.Errorf("embedding not configured; set memory.builtin.embedding or OPENAI_API_KEY for semantic search")
+	}
 
 	// Generate query embedding
 	queryVec, err := m.provider.Embed(query)

@@ -65,9 +65,17 @@ func setDefaults(v *viper.Viper) {
 	// Agent 默认配置
 	v.SetDefault("agents.defaults.model", "openrouter:anthropic/claude-opus-4-5")
 	v.SetDefault("agents.defaults.max_iterations", 15)
-	v.SetDefault("agents.defaults.temperature", 0.7)
-	v.SetDefault("agents.defaults.max_tokens", 4096)
-	v.SetDefault("channels.feishu.event_mode", "webhook")
+	v.SetDefault("agents.defaults.temperature", 1)
+	v.SetDefault("agents.defaults.max_tokens", 8192)
+	v.SetDefault("agents.defaults.context_tokens", 0)
+	v.SetDefault("agents.defaults.limit_history_turns", 0)
+	v.SetDefault("memory.builtin.sync.watch", true)
+	v.SetDefault("memory.builtin.sync.watch_debounce_ms", 1500)
+	v.SetDefault("session.scope", "per-sender")
+	v.SetDefault("session.reset.mode", "daily")
+	v.SetDefault("session.reset.at_hour", 4)
+	v.SetDefault("session.reset.idle_minutes", 60)
+	v.SetDefault("channels.feishu.event_mode", "long_connection")
 
 	// Gateway 默认配置
 	v.SetDefault("gateway.host", "localhost")
@@ -210,6 +218,13 @@ func validateProviders(cfg *Config) error {
 		hasProvider = true
 		if err := validateAPIKey(cfg.Providers.Anthropic.APIKey); err != nil {
 			return fmt.Errorf("anthropic: %w", err)
+		}
+	}
+
+	if cfg.Providers.Moonshot.APIKey != "" {
+		hasProvider = true
+		if err := validateAPIKey(cfg.Providers.Moonshot.APIKey); err != nil {
+			return fmt.Errorf("moonshot (kimi): %w", err)
 		}
 	}
 

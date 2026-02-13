@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/smallnest/goclaw/agent"
@@ -31,6 +32,10 @@ var rootCmd = &cobra.Command{
 	Use:   "goclaw",
 	Short: "Go-based AI Agent framework",
 	Long:  `goclaw is a Go language implementation of an AI Agent framework, inspired by nanobot.`,
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		// 任意子命令执行前确保 .goclaw 与 .goclaw/memory 存在（避免仅用 tui/status/memory 时没有 memory 目录）
+		_ = internal.EnsureMemoryDir()
+	},
 }
 
 var versionCmd = &cobra.Command{
@@ -82,6 +87,7 @@ func init() {
 	rootCmd.AddCommand(agentCmd)
 	rootCmd.AddCommand(sessionsCmd)
 	rootCmd.AddCommand(onboardCmd)
+	rootCmd.AddCommand(configureCmd)
 
 	// Register memory and logs commands from commands package
 	// Note: skills command is already registered in cli/skills.go
@@ -136,14 +142,15 @@ func runStart(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// 初始化日志
-	if err := logger.Init("info", false); err != nil {
+	// 初始化日志，同时写入 ~/.goclaw/logs/goclaw.log
+	logPath := filepath.Join(internal.GetGoclawDir(), "logs", "goclaw.log")
+	if err := logger.InitWithFile("info", false, logPath); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
 		os.Exit(1)
 	}
 	defer func() { _ = logger.Sync() }()
 
-	logger.Info("Starting goclaw agent")
+	logger.Info("Starting goclaw agent", zap.String("log_file", logPath))
 
 	// 验证配置
 	if err := config.Validate(cfg); err != nil {
@@ -163,16 +170,29 @@ func runStart(cmd *cobra.Command, args []string) {
 	} else {
 		logger.Info("Workspace ready", zap.String("path", workspaceDir))
 	}
+	// 确保 .goclaw/memory 目录存在（builtin 记忆 store.db）
+	if err := internal.EnsureMemoryDir(); err != nil {
+		logger.Warn("Failed to ensure memory directory", zap.Error(err))
+	}
 
 	// 创建消息总线
 	messageBus := bus.NewMessageBus(100)
 	defer messageBus.Close()
 
-	// 创建会话管理器
-	sessionDir := os.Getenv("HOME") + "/.goclaw/sessions"
+	// 创建会话管理器（与 status 一致：优先 config.Session.Store，否则 ~/.goclaw/sessions，Windows 兼容）
+	sessionDir := filepath.Join(internal.GetGoclawDir(), "sessions")
+	if cfg.Session.Store != "" {
+		sessionDir = cfg.Session.Store
+	}
 	sessionMgr, err := session.NewManager(sessionDir)
 	if err != nil {
 		logger.Fatal("Failed to create session manager", zap.Error(err))
+	}
+	if cfg.Session.Reset != nil {
+		p := session.ToResetPolicy(&session.SessionResetConfigLike{
+			Mode: cfg.Session.Reset.Mode, AtHour: cfg.Session.Reset.AtHour, IdleMinutes: cfg.Session.Reset.IdleMinutes,
+		})
+		sessionMgr.SetResetPolicy(&p)
 	}
 
 	// 创建记忆存储
@@ -184,9 +204,9 @@ func runStart(cmd *cobra.Command, args []string) {
 	// 创建工具注册表
 	toolRegistry := agent.NewToolRegistry()
 
-	// 创建技能加载器（统一使用 ~/.goclaw/skills 目录）
-	goclawDir := os.Getenv("HOME") + "/.goclaw"
-	skillsDir := goclawDir + "/skills"
+	// 创建技能加载器（统一使用 ~/.goclaw/skills，Windows 兼容）
+	goclawDir := internal.GetGoclawDir()
+	skillsDir := filepath.Join(goclawDir, "skills")
 	skillsLoader := agent.NewSkillsLoader(goclawDir, []string{skillsDir})
 	if err := skillsLoader.Discover(); err != nil {
 		logger.Warn("Failed to discover skills", zap.Error(err))
@@ -287,6 +307,14 @@ func runStart(cmd *cobra.Command, args []string) {
 
 	// 创建网关服务器
 	gatewayServer := gateway.NewServer(&cfg.Gateway, messageBus, channelMgr, sessionMgr)
+	if cfg.Session.Reset != nil {
+		p := session.ToResetPolicy(&session.SessionResetConfigLike{
+			Mode:        cfg.Session.Reset.Mode,
+			AtHour:      cfg.Session.Reset.AtHour,
+			IdleMinutes: cfg.Session.Reset.IdleMinutes,
+		})
+		gatewayServer.SetSessionResetPolicy(&p)
+	}
 	if err := gatewayServer.Start(ctx); err != nil {
 		logger.Warn("Failed to start gateway server", zap.Error(err))
 	}
@@ -374,6 +402,18 @@ func runConfigShow(cmd *cobra.Command, args []string) {
 	fmt.Printf("  Model: %s\n", cfg.Agents.Defaults.Model)
 	fmt.Printf("  Max Iterations: %d\n", cfg.Agents.Defaults.MaxIterations)
 	fmt.Printf("  Temperature: %.1f\n", cfg.Agents.Defaults.Temperature)
+	backend := cfg.Memory.Backend
+	if backend == "" {
+		backend = "builtin"
+	}
+	fmt.Printf("  Memory: %s\n", backend)
+	if cfg.Memory.Builtin.Embedding != nil && cfg.Memory.Builtin.Embedding.Provider != "" {
+		fmt.Printf("  Memory Embedding: provider=%s", cfg.Memory.Builtin.Embedding.Provider)
+		if cfg.Memory.Builtin.Embedding.Fallback != "" {
+			fmt.Printf(", fallback=%s", cfg.Memory.Builtin.Embedding.Fallback)
+		}
+		fmt.Println()
+	}
 }
 
 // runInstall 安装 goclaw workspace 模板

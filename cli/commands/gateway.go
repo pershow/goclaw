@@ -20,6 +20,7 @@ import (
 	"github.com/smallnest/goclaw/channels"
 	"github.com/smallnest/goclaw/config"
 	"github.com/smallnest/goclaw/gateway"
+	"github.com/smallnest/goclaw/internal"
 	"github.com/smallnest/goclaw/internal/logger"
 	"github.com/smallnest/goclaw/session"
 	"github.com/spf13/cobra"
@@ -140,16 +141,18 @@ func GatewayCommand() *cobra.Command {
 
 // runGateway runs the gateway server
 func runGateway(cmd *cobra.Command, args []string) {
-	// Initialize logger
+	// 日志同时输出到 stdout 与 ~/.goclaw/logs/goclaw.log
+	logPath := filepath.Join(internal.GetGoclawDir(), "logs", "goclaw.log")
 	logLevel := "info"
 	if gatewayVerbose {
 		logLevel = "debug"
 	}
-	if err := logger.Init(logLevel, false); err != nil {
+	if err := logger.InitWithFile(logLevel, false, logPath); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
 		os.Exit(1)
 	}
 	defer logger.Sync() // nolint:errcheck
+	logger.Info("Log file", zap.String("path", logPath))
 
 	fmt.Println("🚀 Starting goclaw Gateway")
 
@@ -172,10 +175,22 @@ func runGateway(cmd *cobra.Command, args []string) {
 	messageBus := bus.NewMessageBus(100)
 	defer messageBus.Close()
 
-	sessionDir := os.Getenv("HOME") + "/.goclaw/sessions"
+	// Session 目录与 start/status 一致（Windows 兼容）
+	sessionDir := filepath.Join(internal.GetGoclawDir(), "sessions")
+	if cfg.Session.Store != "" {
+		sessionDir = cfg.Session.Store
+	}
 	sessionMgr, err := session.NewManager(sessionDir)
 	if err != nil {
 		logger.Fatal("Failed to create session manager", zap.Error(err))
+	}
+	var sessionPolicy *session.ResetPolicy
+	if cfg.Session.Reset != nil {
+		p := session.ToResetPolicy(&session.SessionResetConfigLike{
+			Mode: cfg.Session.Reset.Mode, AtHour: cfg.Session.Reset.AtHour, IdleMinutes: cfg.Session.Reset.IdleMinutes,
+		})
+		sessionPolicy = &p
+		sessionMgr.SetResetPolicy(sessionPolicy)
 	}
 
 	channelMgr := channels.NewManager(messageBus)
@@ -183,9 +198,10 @@ func runGateway(cmd *cobra.Command, args []string) {
 		logger.Warn("Failed to setup channels from config", zap.Error(err))
 	}
 
-	// Create gateway server
-	// NewServer reads from cfg.Gateway.WebSocket, so we only override if CLI flags are explicitly provided
 	gatewayServer := gateway.NewServer(&cfg.Gateway, messageBus, channelMgr, sessionMgr)
+	if sessionPolicy != nil {
+		gatewayServer.SetSessionResetPolicy(sessionPolicy)
+	}
 
 	// Only override WebSocket config if CLI flags are explicitly provided
 	// If no CLI flags are set, use config file settings (already loaded by NewServer)

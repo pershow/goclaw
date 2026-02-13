@@ -226,6 +226,16 @@ goclaw 按以下顺序查找配置文件（找到第一个即使用）：
 
 可通过 `--config` 参数指定配置文件路径覆盖默认行为。
 
+**数据与存储位置**（默认均在 `~/.goclaw/` 下，Windows 为 `%USERPROFILE%\.goclaw\`）：
+
+| 用途 | 默认路径 | 配置项 |
+|------|----------|--------|
+| 配置文件 | `~/.goclaw/config.json` | 见上方查找顺序 |
+| 会话（对话记录） | `~/.goclaw/sessions/*.jsonl` | `session.store` |
+| 记忆 DB（builtin） | `~/.goclaw/memory/store.db` | `memory.builtin.database_path` |
+| 技能 | `~/.goclaw/skills/` | 见技能系统说明 |
+| 工作区 | `~/.goclaw/workspace` | `workspace.path` |
+
 创建 `config.json` (参考 `config.example.json`):
 
 ```json
@@ -282,6 +292,18 @@ goclaw 按以下顺序查找配置文件（找到第一个即使用）：
 }
 ```
 
+#### 记忆 (Memory) 与嵌入
+
+当使用内置记忆后端 (`memory.backend: builtin`) 时，可配置 `memory.builtin.embedding` 以启用语义搜索与批量嵌入：
+
+| 字段 | 说明 |
+|------|------|
+| `provider` | 主嵌入提供商，如 `openai`。需在 `providers.openai` 中配置 `api_key`，或设置环境变量 `OPENAI_API_KEY` |
+| `fallback` | 可选。主提供商不可用时的备用提供商（当前实现支持主 provider；fallback 需额外实现） |
+
+- 不配置 `embedding` 时，builtin 仍可工作（仅元数据/FTS，无向量检索）。
+- CLI 在无配置文件时会默认启用 `embedding.provider: "openai"`，若已设置 `OPENAI_API_KEY` 即可使用记忆搜索与索引。
+
 ### 运行
 
 ```bash
@@ -304,6 +326,65 @@ goclaw 按以下顺序查找配置文件（找到第一个即使用）：
 # 查看帮助
 ./goclaw --help
 ```
+
+### 启动与测试（从零到跑通）
+
+**1. 前置条件**
+
+- 已安装 Go 1.21+
+- （可选）LLM：在 `~/.goclaw/config.json` 或当前目录 `config.json` 中配置 `providers.openai` 的 `api_key`，或设置环境变量 `OPENAI_API_KEY`、`DEEPSEEK_API_KEY` 等
+- 记忆嵌入（可选）：同上；不配置则记忆仅元数据，无向量搜索
+
+**2. 构建**
+
+```bash
+# 仅构建后端（不打包 UI）
+go build -o goclaw .
+
+# Windows 可生成 goclaw.exe
+go build -o goclaw.exe .
+```
+
+若需要 Web 控制界面，需先构建前端并嵌入（见 [QUICKSTART.md](QUICKSTART.md)）：
+
+```bash
+# Windows
+build-ui.bat
+
+# Linux/Mac
+./build-ui.sh
+go build -o goclaw .
+```
+
+**3. 启动方式**
+
+| 方式 | 命令 | 说明 |
+|------|------|------|
+| Web 控制台 | `./goclaw gateway run --port 28789` | 浏览器打开 http://localhost:28789/ |
+| 终端 TUI | `./goclaw tui` | 交互式对话 |
+| 单次对话 | `./goclaw agent --message "你好"` | 发一条消息并退出 |
+
+**4. 验证新功能**
+
+```bash
+# 配置与会话
+./goclaw config show
+./goclaw sessions list
+
+# 记忆状态（若配置了 memory.builtin.embedding 或 OPENAI_API_KEY）
+./goclaw memory status
+
+# 记忆索引（将工作区 MEMORY.md 等做嵌入索引，需 API Key）
+./goclaw memory index
+
+# 语义搜索
+./goclaw memory search "用户偏好"
+
+# 单次 Agent（会走上下文窗口、截断与可选摘要压缩）
+./goclaw agent --message "介绍一下你自己"
+```
+
+在 Web 或 TUI 中与 Agent 对话时，可让模型使用 `sessions_list`、`sessions_history`、`session_status` 等会话类工具；长对话触发上下文溢出时会先截断历史再重试，仍超限则会尝试 LLM 摘要压缩后重试。
 
 ### 使用示例
 

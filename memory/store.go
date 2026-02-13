@@ -2,16 +2,20 @@ package memory
 
 import (
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	_ "github.com/glebarez/sqlite"
 	"github.com/google/uuid"
 )
+
+const defaultEmbeddingCacheMaxEntries = 10000
 
 // SQLiteStore implements the Store interface using SQLite
 type SQLiteStore struct {
@@ -20,6 +24,7 @@ type SQLiteStore struct {
 	provider    EmbeddingProvider
 	mu          sync.RWMutex
 	initialized bool
+	storeConfig StoreConfig // 用于原子重建时创建临时库
 }
 
 // StoreConfig configures the SQLite memory store
@@ -52,9 +57,7 @@ func NewSQLiteStore(config StoreConfig) (*SQLiteStore, error) {
 	if config.DBPath == "" {
 		return nil, fmt.Errorf("database path is required")
 	}
-	if config.Provider == nil {
-		return nil, fmt.Errorf("embedding provider is required")
-	}
+	// Provider 可为 nil（仅 FTS/元数据场景）；此时不初始化向量表
 
 	// Ensure directory exists
 	dir := filepath.Dir(config.DBPath)
@@ -73,9 +76,10 @@ func NewSQLiteStore(config StoreConfig) (*SQLiteStore, error) {
 	db.SetMaxIdleConns(1)
 
 	store := &SQLiteStore{
-		db:       db,
-		dbPath:   config.DBPath,
-		provider: config.Provider,
+		db:          db,
+		dbPath:      config.DBPath,
+		provider:    config.Provider,
+		storeConfig: config,
 	}
 
 	// Initialize schema
@@ -175,9 +179,29 @@ func (s *SQLiteStore) initSchema(config StoreConfig) error {
 		}
 	}
 
+	// Embedding cache (content_hash -> embedding) to avoid re-calling provider
+	if _, err := s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS embedding_cache (
+			content_hash TEXT PRIMARY KEY,
+			embedding BLOB NOT NULL,
+			dims INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)
+	`); err != nil {
+		return fmt.Errorf("failed to create embedding_cache table: %w", err)
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_embedding_cache_updated ON embedding_cache(updated_at)`); err != nil {
+		// non-fatal
+		_ = err
+	}
+
 	// Store schema version
 	s.setMeta("schema_version", "1")
-	s.setMeta("provider_dimension", fmt.Sprintf("%d", s.provider.Dimension()))
+	dim := 0
+	if s.provider != nil {
+		dim = s.provider.Dimension()
+	}
+	s.setMeta("provider_dimension", fmt.Sprintf("%d", dim))
 
 	return nil
 }
@@ -210,7 +234,13 @@ func (s *SQLiteStore) initVectorSearch() error {
 		}
 	}
 
-	dimension := s.provider.Dimension()
+	dimension := 0
+	if s.provider != nil {
+		dimension = s.provider.Dimension()
+	}
+	if dimension <= 0 {
+		return nil // 无 provider 时不创建向量表
+	}
 
 	// Create virtual table for vector search
 	_, err := s.db.Exec(fmt.Sprintf(`
@@ -574,11 +604,86 @@ func (s *SQLiteStore) searchVector(query []float32, opts SearchOptions) ([]*Sear
 	return results, nil
 }
 
-// searchFTS performs full-text search
+// searchFTS performs full-text search (used when query is from vector; for text query use SearchByTextQuery)
 func (s *SQLiteStore) searchFTS(query []float32, opts SearchOptions) ([]*SearchResult, error) {
-	// For now, this is a placeholder
-	// In a full implementation, we'd convert the vector to text or use a separate text query
 	return []*SearchResult{}, nil
+}
+
+// SearchByTextQuery 使用 FTS5 全文检索（不配置 embedding 时可用）
+func (s *SQLiteStore) SearchByTextQuery(query string, opts SearchOptions) ([]*SearchResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if !s.isFTSEnabled() {
+		return nil, fmt.Errorf("FTS not enabled")
+	}
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return []*SearchResult{}, nil
+	}
+	// FTS5: 多个词用 OR 连接，避免特殊字符
+	terms := strings.Fields(query)
+	for i, t := range terms {
+		terms[i] = strings.TrimSpace(t)
+	}
+	if len(terms) == 0 {
+		return []*SearchResult{}, nil
+	}
+	ftsQuery := strings.Join(terms, " OR ")
+	if len(ftsQuery) > 500 {
+		ftsQuery = ftsQuery[:500]
+	}
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := s.db.Query(`
+		SELECT m.id, m.text, m.source, m.type, m.created_at, m.updated_at,
+		       m.file_path, m.line_number, m.session_key, m.tags
+		FROM memory_fts f
+		JOIN memories m ON m.id = f.id
+		WHERE f MATCH ?
+		ORDER BY bm25(f) LIMIT ?
+	`, ftsQuery, limit)
+	if err != nil {
+		return nil, fmt.Errorf("fts search: %w", err)
+	}
+	defer rows.Close()
+
+	var results []*SearchResult
+	for rows.Next() {
+		var id, text, source, memType string
+		var createdAt, updatedAt int64
+		var filePath sql.NullString
+		var lineNumber sql.NullInt64
+		var sessionKey sql.NullString
+		var tagsStr sql.NullString
+		if err := rows.Scan(&id, &text, &source, &memType, &createdAt, &updatedAt, &filePath, &lineNumber, &sessionKey, &tagsStr); err != nil {
+			continue
+		}
+		md := MemoryMetadata{}
+		if filePath.Valid {
+			md.FilePath = filePath.String
+		}
+		if lineNumber.Valid {
+			md.LineNumber = int(lineNumber.Int64)
+		}
+		if sessionKey.Valid {
+			md.SessionKey = sessionKey.String
+		}
+		if tagsStr.Valid && tagsStr.String != "" {
+			_ = json.Unmarshal([]byte(tagsStr.String), &md.Tags)
+		}
+		results = append(results, &SearchResult{
+			VectorEmbedding: VectorEmbedding{
+				ID: id, Text: text, Source: MemorySource(source), Type: MemoryType(memType),
+				CreatedAt: time.Unix(createdAt, 0), UpdatedAt: time.Unix(updatedAt, 0),
+				Metadata: md,
+			},
+			Score: 0.85,
+		})
+	}
+	return results, rows.Err()
 }
 
 // mergeHybridResults combines vector and FTS results
@@ -946,6 +1051,97 @@ func appendTypes(args []interface{}, types []MemoryType) []interface{} {
 		args = append(args, string(t))
 	}
 	return args
+}
+
+// GetCachedEmbedding 从 embedding_cache 表按 content_hash 取缓存嵌入，不存在返回 (nil, false)
+func (s *SQLiteStore) GetCachedEmbedding(contentHash string) ([]float32, bool) {
+	if contentHash == "" {
+		return nil, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var blob []byte
+	var dims int64
+	err := s.db.QueryRow(`
+		SELECT embedding, dims FROM embedding_cache WHERE content_hash = ?
+	`, contentHash).Scan(&blob, &dims)
+	if err == sql.ErrNoRows || err != nil || len(blob) == 0 {
+		return nil, false
+	}
+	vec := make([]float32, dims)
+	if len(blob) != int(dims*4) {
+		return nil, false
+	}
+	for i := int64(0); i < dims; i++ {
+		vec[i] = float32(binary.LittleEndian.Uint32(blob[i*4 : (i+1)*4]))
+	}
+	return vec, true
+}
+
+// SetCachedEmbedding 写入 embedding_cache；若超过 defaultEmbeddingCacheMaxEntries 则按 updated_at 淘汰最旧
+func (s *SQLiteStore) SetCachedEmbedding(contentHash string, vec []float32) error {
+	if contentHash == "" || len(vec) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	blob := make([]byte, len(vec)*4)
+	for i, v := range vec {
+		binary.LittleEndian.PutUint32(blob[i*4:(i+1)*4], uint32(v))
+	}
+	now := time.Now().Unix()
+	_, err := s.db.Exec(`
+		INSERT INTO embedding_cache (content_hash, embedding, dims, updated_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(content_hash) DO UPDATE SET embedding = excluded.embedding, dims = excluded.dims, updated_at = excluded.updated_at
+	`, contentHash, blob, len(vec), now)
+	if err != nil {
+		return err
+	}
+	// Simple LRU: delete oldest when over limit
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM embedding_cache`).Scan(&count); err == nil && count > defaultEmbeddingCacheMaxEntries {
+		toDelete := count - defaultEmbeddingCacheMaxEntries
+		_, _ = s.db.Exec(`DELETE FROM embedding_cache WHERE rowid IN (SELECT rowid FROM embedding_cache ORDER BY updated_at ASC LIMIT ?)`, toDelete)
+	}
+	return nil
+}
+
+// RebuildAtomic 原子性重建：在临时 DB 上执行 populate，成功后替换主 DB（与 OpenClaw temp DB + swap 对齐）
+func (s *SQLiteStore) RebuildAtomic(populate func(Store) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tmpPath := s.dbPath + ".rebuild.tmp"
+	cfg := s.storeConfig
+	cfg.DBPath = tmpPath
+	tmpStore, err := NewSQLiteStore(cfg)
+	if err != nil {
+		return fmt.Errorf("create temp store: %w", err)
+	}
+	if err := populate(tmpStore); err != nil {
+		_ = tmpStore.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("populate temp store: %w", err)
+	}
+	if err := tmpStore.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := s.db.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, s.dbPath); err != nil {
+		s.db, _ = sql.Open("sqlite", s.dbPath)
+		return fmt.Errorf("atomic replace: %w", err)
+	}
+	s.db, err = sql.Open("sqlite", s.dbPath)
+	if err != nil {
+		return fmt.Errorf("reopen store: %w", err)
+	}
+	s.db.SetMaxOpenConns(1)
+	s.db.SetMaxIdleConns(1)
+	return nil
 }
 
 func float32SliceToString(vec []float32) string {

@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/smallnest/goclaw/config"
+	"github.com/smallnest/goclaw/internal"
 	"github.com/smallnest/goclaw/memory"
 	"github.com/smallnest/goclaw/memory/qmd"
 	"github.com/spf13/cobra"
@@ -55,10 +58,13 @@ var memoryBackendCmd = &cobra.Command{
 }
 
 var (
-	memorySearchLimit    int
-	memorySearchMinScore float64
-	memorySearchJSON     bool
-	memoryForceBuiltin   bool
+	memorySearchLimit        int
+	memorySearchMinScore     float64
+	memorySearchJSON         bool
+	memoryForceBuiltin       bool
+	memoryIndexAtomic        bool
+	memoryIndexWatch         bool
+	memoryWatchDebounceSec   int
 )
 
 func init() {
@@ -72,6 +78,9 @@ func init() {
 	memorySearchCmd.Flags().BoolVar(&memorySearchJSON, "json", false, "Output in JSON format")
 
 	memoryIndexCmd.Flags().BoolVar(&memoryForceBuiltin, "builtin", false, "Force using builtin backend")
+	memoryIndexCmd.Flags().BoolVar(&memoryIndexAtomic, "atomic", false, "Atomic rebuild: write to temp DB then swap (like OpenClaw)")
+	memoryIndexCmd.Flags().BoolVar(&memoryIndexWatch, "watch", false, "Watch workspace/memory and reindex on file changes (builtin only)")
+	memoryIndexCmd.Flags().IntVar(&memoryWatchDebounceSec, "watch-debounce", 5, "Seconds to wait after last change before reindex (with --watch)")
 }
 
 // getWorkspace 获取工作区路径
@@ -103,12 +112,13 @@ func getSearchManager() (memory.MemorySearchManager, error) {
 
 	cfg, err := config.Load("")
 	if err != nil {
-		// 使用默认配置
+		// 使用默认配置；启用 builtin 嵌入（API Key 可从 OPENAI_API_KEY 或配置文件读取）
 		cfg = &config.Config{
 			Memory: config.MemoryConfig{
 				Backend: "builtin",
 				Builtin: config.BuiltinMemoryConfig{
-					Enabled: true,
+					Enabled:   true,
+					Embedding: &config.BuiltinEmbeddingConfig{Provider: "openai"},
 				},
 			},
 		}
@@ -119,7 +129,7 @@ func getSearchManager() (memory.MemorySearchManager, error) {
 		cfg.Memory.Backend = "builtin"
 	}
 
-	return memory.GetMemorySearchManager(cfg.Memory, workspace)
+	return memory.GetMemorySearchManager(cfg, workspace)
 }
 
 // runMemoryStatus 执行记忆状态命令
@@ -226,6 +236,16 @@ func runMemoryBackend(cmd *cobra.Command, args []string) {
 
 	fmt.Printf("Backend: %s\n", backend)
 
+	if backend == "builtin" || backend == "" {
+		if cfg.Memory.Builtin.Embedding != nil && cfg.Memory.Builtin.Embedding.Provider != "" {
+			fmt.Printf("  Embedding: provider=%s", cfg.Memory.Builtin.Embedding.Provider)
+			if cfg.Memory.Builtin.Embedding.Fallback != "" {
+				fmt.Printf(", fallback=%s", cfg.Memory.Builtin.Embedding.Fallback)
+			}
+			fmt.Println()
+		}
+	}
+
 	if backend == "qmd" {
 		fmt.Printf("  QMD Command: %s\n", cfg.Memory.QMD.Command)
 		fmt.Printf("  Enabled: %v\n", cfg.Memory.QMD.Enabled)
@@ -256,6 +276,10 @@ func runMemoryIndex(cmd *cobra.Command, args []string) {
 
 	// 如果强制使用 builtin 或配置为 builtin
 	if memoryForceBuiltin || cfg.Memory.Backend == "builtin" || cfg.Memory.Backend == "" {
+		if memoryIndexWatch {
+			runBuiltinIndexWatch(workspace, cfg)
+			return
+		}
 		runBuiltinIndex(workspace, cfg)
 		return
 	}
@@ -270,91 +294,169 @@ func runMemoryIndex(cmd *cobra.Command, args []string) {
 	os.Exit(1)
 }
 
-// runBuiltinIndex 执行 builtin 索引
-func runBuiltinIndex(workspace string, cfg *config.Config) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to get home directory: %v\n", err)
-		os.Exit(1)
+// buildEmbeddingProvider 从 config 创建嵌入 Provider（与 OpenClaw 一致：含 failover）；无配置时用默认 OpenAI
+func buildEmbeddingProvider(cfg *config.Config) (memory.EmbeddingProvider, error) {
+	if cfg != nil && cfg.Memory.Builtin.Embedding != nil && cfg.Memory.Builtin.Embedding.Provider != "" {
+		return memory.NewEmbeddingProviderFromConfig(cfg, cfg.Memory.Builtin.Embedding)
 	}
-
-	memoryDir := filepath.Join(workspace, "memory")
-	dbPath := filepath.Join(home, ".goclaw", "memory", "store.db")
-
-	// Load config for API key
-	apiKey := cfg.Providers.OpenAI.APIKey
+	apiKey := ""
+	if cfg != nil {
+		apiKey = cfg.Providers.OpenAI.APIKey
+		if apiKey == "" {
+			apiKey = cfg.Providers.OpenRouter.APIKey
+		}
+	}
 	if apiKey == "" {
-		apiKey = cfg.Providers.OpenRouter.APIKey
+		apiKey = os.Getenv("OPENAI_API_KEY")
 	}
-
 	if apiKey == "" {
-		fmt.Fprintf(os.Stderr, "Error: No embedding provider API key found in config.\n")
-		fmt.Fprintf(os.Stderr, "Please configure OpenAI or OpenRouter API key in ~/.goclaw/config.json\n")
-		os.Exit(1)
+		return nil, fmt.Errorf("no embedding API key (set memory.builtin.embedding in config or OPENAI_API_KEY)")
 	}
-
-	// Create embedding provider
 	providerCfg := memory.DefaultOpenAIConfig(apiKey)
-	provider, err := memory.NewOpenAIProvider(providerCfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create embedding provider: %v\n", err)
-		os.Exit(1)
+	return memory.NewOpenAIProvider(providerCfg)
+}
+
+// populateStore 向给定 store 写入 workspace/memory 下的 MEMORY.md 与日更文件（用于原子重建或直接写入）
+func populateStore(ctx context.Context, store memory.Store, provider memory.EmbeddingProvider, memoryDir string) error {
+	return memory.IndexWorkspaceToStore(ctx, store, provider, memoryDir)
+}
+
+// runBuiltinIndexOnce 执行一次 builtin 索引；quiet 为 true 时仅输出简要信息（供 watch 回调使用）
+func runBuiltinIndexOnce(workspace string, cfg *config.Config, quiet bool) error {
+	memoryDir := filepath.Join(workspace, "memory")
+	dbPath := filepath.Join(internal.GetMemoryDir(), "store.db")
+	if cfg != nil && cfg.Memory.Builtin.DatabasePath != "" {
+		dbPath = cfg.Memory.Builtin.DatabasePath
 	}
 
-	// Create store
+	provider, err := buildEmbeddingProvider(cfg)
+	if err != nil {
+		return err
+	}
+
 	storeConfig := memory.DefaultStoreConfig(dbPath, provider)
 	store, err := memory.NewSQLiteStore(storeConfig)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to open memory store: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("open memory store: %w", err)
 	}
 	defer store.Close()
 
-	// Create memory manager
-	managerConfig := memory.DefaultManagerConfig(store, provider)
-	manager, err := memory.NewMemoryManager(managerConfig)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create memory manager: %v\n", err)
-		os.Exit(1)
+	if !quiet {
+		fmt.Println("Indexing memory files (builtin backend)...")
+		fmt.Printf("Workspace: %s\n", workspace)
+		fmt.Printf("Database: %s\n", dbPath)
+		if memoryIndexAtomic {
+			fmt.Println("Using atomic rebuild (temp DB + swap)")
+		}
+		fmt.Println()
 	}
-	defer manager.Close()
-
-	fmt.Println("Indexing memory files (builtin backend)...")
-	fmt.Printf("Workspace: %s\n", workspace)
-	fmt.Printf("Database: %s\n\n", dbPath)
 
 	ctx := context.Background()
 
-	// Index MEMORY.md
-	longTermPath := filepath.Join(memoryDir, "MEMORY.md")
-	if _, err := os.Stat(longTermPath); err == nil {
-		fmt.Printf("Indexing %s...\n", longTermPath)
-		if err := indexFile(ctx, manager, longTermPath, memory.MemorySourceLongTerm, memory.MemoryTypeFact); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Failed to index %s: %v\n", longTermPath, err)
-		} else {
-			fmt.Println("  OK")
+	if memoryIndexAtomic {
+		if err := store.RebuildAtomic(func(tmp memory.Store) error {
+			return populateStore(ctx, tmp, provider, memoryDir)
+		}); err != nil {
+			return fmt.Errorf("atomic rebuild: %w", err)
 		}
 	} else {
-		fmt.Printf("No long-term memory file found (%s)\n", longTermPath)
-	}
+		managerConfig := memory.DefaultManagerConfig(store, provider)
+		manager, err := memory.NewMemoryManager(managerConfig)
+		if err != nil {
+			return fmt.Errorf("create memory manager: %w", err)
+		}
+		defer manager.Close()
 
-	// Index daily notes
-	dailyFiles, err := filepath.Glob(filepath.Join(memoryDir, "????-??-??.md"))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Failed to find daily notes: %v\n", err)
-	} else {
-		fmt.Printf("\nIndexing daily notes (%d files)...\n", len(dailyFiles))
+		longTermPath := filepath.Join(memoryDir, "MEMORY.md")
+		if _, err := os.Stat(longTermPath); err == nil {
+			if !quiet {
+				fmt.Printf("Indexing %s...\n", longTermPath)
+			}
+			if err := memory.IndexFileToManager(ctx, manager, longTermPath, memory.MemorySourceLongTerm, memory.MemoryTypeFact); err != nil {
+				if quiet {
+					return fmt.Errorf("index %s: %w", longTermPath, err)
+				}
+				fmt.Fprintf(os.Stderr, "Warning: Failed to index %s: %v\n", longTermPath, err)
+			} else if !quiet {
+				fmt.Println("  OK")
+			}
+		} else if !quiet {
+			fmt.Printf("No long-term memory file found (%s)\n", longTermPath)
+		}
+
+		dailyFiles, err := filepath.Glob(filepath.Join(memoryDir, "????-??-??.md"))
+		if err != nil {
+			if !quiet {
+				fmt.Fprintf(os.Stderr, "Warning: Failed to find daily notes: %v\n", err)
+			}
+			return fmt.Errorf("glob daily notes: %w", err)
+		}
 		for _, dailyFile := range dailyFiles {
-			fmt.Printf("  %s...", filepath.Base(dailyFile))
-			if err := indexFile(ctx, manager, dailyFile, memory.MemorySourceDaily, memory.MemoryTypeContext); err != nil {
+			if !quiet {
+				fmt.Printf("  %s...", filepath.Base(dailyFile))
+			}
+			if err := memory.IndexFileToManager(ctx, manager, dailyFile, memory.MemorySourceDaily, memory.MemoryTypeContext); err != nil {
+				if quiet {
+					return fmt.Errorf("index %s: %w", dailyFile, err)
+				}
 				fmt.Fprintf(os.Stderr, "Failed: %v\n", err)
-			} else {
+			} else if !quiet {
 				fmt.Println(" OK")
 			}
 		}
 	}
 
-	fmt.Println("\nIndexing complete!")
+	if quiet {
+		fmt.Fprintf(os.Stderr, "[memory] Reindex complete\n")
+	} else {
+		fmt.Println("\nIndexing complete!")
+	}
+	return nil
+}
+
+// runBuiltinIndex 执行 builtin 索引（失败时退出进程）
+func runBuiltinIndex(workspace string, cfg *config.Config) {
+	if err := runBuiltinIndexOnce(workspace, cfg, false); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Set memory.builtin.embedding in config or OPENAI_API_KEY env.\n")
+		os.Exit(1)
+	}
+}
+
+// runBuiltinIndexWatch 首次索引后监听 workspace/memory，变更时去抖重索引（与 OpenClaw 对齐）
+func runBuiltinIndexWatch(workspace string, cfg *config.Config) {
+	memoryDir := filepath.Join(workspace, "memory")
+
+	if err := runBuiltinIndexOnce(workspace, cfg, false); err != nil {
+		fmt.Fprintf(os.Stderr, "Initial index failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := os.MkdirAll(memoryDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create memory dir: %v\n", err)
+		os.Exit(1)
+	}
+
+	debounce := time.Duration(memoryWatchDebounceSec) * time.Second
+	if debounce < time.Second {
+		debounce = time.Second
+	}
+	watcher, err := memory.NewWatcher(memoryDir, debounce, func() {
+		if err := runBuiltinIndexOnce(workspace, cfg, true); err != nil {
+			fmt.Fprintf(os.Stderr, "[memory watch] reindex failed: %v\n", err)
+		}
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to start memory watcher: %v\n", err)
+		os.Exit(1)
+	}
+	defer watcher.Close()
+
+	fmt.Printf("\nWatching %s (debounce %s). Ctrl+C to stop.\n", memoryDir, debounce)
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	<-sigChan
+	fmt.Println("\nStopping memory watcher...")
 }
 
 // runQMDIndex 执行 QMD 索引
@@ -520,137 +622,4 @@ func outputSearchResults(query string, results []*memory.SearchResult) {
 	}
 }
 
-// Helper functions for builtin indexing
-
-// indexFile 索引单个文件
-func indexFile(ctx context.Context, manager *memory.MemoryManager, filePath string, source memory.MemorySource, memType memory.MemoryType) error {
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		return err
-	}
-
-	text := string(content)
-	if text == "" {
-		return nil
-	}
-
-	// Split into chunks (paragraphs)
-	chunks := splitIntoChunks(text, 500)
-
-	items := make([]memory.MemoryItem, 0, len(chunks))
-	for i, chunk := range chunks {
-		items = append(items, memory.MemoryItem{
-			Text:   chunk,
-			Source: source,
-			Type:   memType,
-			Metadata: memory.MemoryMetadata{
-				FilePath: filePath,
-				Tags:     []string{"indexed"},
-			},
-		})
-
-		// Add line number hint
-		if i > 0 {
-			items[i-1].Metadata.LineNumber = i * 10
-		}
-	}
-
-	if len(items) > 0 {
-		if err := manager.AddMemoryBatch(ctx, items); err != nil {
-			return fmt.Errorf("failed to add memories: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// splitIntoChunks 将文本分割成块
-func splitIntoChunks(text string, maxChunkSize int) []string {
-	// Simple paragraph-based chunking
-	paragraphs := splitParagraphs(text)
-	chunks := make([]string, 0)
-	currentChunk := ""
-
-	for _, para := range paragraphs {
-		if len(currentChunk)+len(para) > maxChunkSize && currentChunk != "" {
-			chunks = append(chunks, currentChunk)
-			currentChunk = para
-		} else {
-			if currentChunk != "" {
-				currentChunk += "\n\n"
-			}
-			currentChunk += para
-		}
-	}
-
-	if currentChunk != "" {
-		chunks = append(chunks, currentChunk)
-	}
-
-	return chunks
-}
-
-// splitParagraphs 分割段落
-func splitParagraphs(text string) []string {
-	// Split by double newline
-	paragraphs := make([]string, 0)
-	current := ""
-
-	lines := splitLines(text)
-	for _, line := range lines {
-		line = trimSpace(line)
-		if line == "" {
-			if current != "" {
-				paragraphs = append(paragraphs, current)
-				current = ""
-			}
-		} else {
-			if current != "" {
-				current += " "
-			}
-			current += line
-		}
-	}
-
-	if current != "" {
-		paragraphs = append(paragraphs, current)
-	}
-
-	return paragraphs
-}
-
-// Helper functions to avoid importing strings package
-func splitLines(s string) []string {
-	lines := make([]string, 0)
-	current := ""
-
-	for _, ch := range s {
-		if ch == '\n' {
-			lines = append(lines, current)
-			current = ""
-		} else {
-			current += string(ch)
-		}
-	}
-
-	if current != "" {
-		lines = append(lines, current)
-	}
-
-	return lines
-}
-
-func trimSpace(s string) string {
-	start := 0
-	end := len(s)
-
-	for start < end && (s[start] == ' ' || s[start] == '\t' || s[start] == '\n' || s[start] == '\r') {
-		start++
-	}
-
-	for end > start && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\n' || s[end-1] == '\r') {
-		end--
-	}
-
-	return s[start:end]
-}
+// Helper: builtin 索引使用 memory.IndexFileToManager / memory.IndexWorkspaceToStore（与 memory 包共用）

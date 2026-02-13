@@ -15,14 +15,20 @@ import (
 
 // OpenAIProvider OpenAI provider
 type OpenAIProvider struct {
-	client    openai.Client
-	model     string
-	maxTokens int
-	extraBody map[string]interface{}
+	client           openai.Client
+	model            string
+	maxTokens        int
+	extraBody        map[string]interface{}
+	streamingEnabled bool // 是否启用流式输出
 }
 
 // NewOpenAIProvider creates an OpenAI provider.
 func NewOpenAIProvider(apiKey, baseURL, model string, maxTokens int, extraBody map[string]interface{}) (*OpenAIProvider, error) {
+	return NewOpenAIProviderWithStreaming(apiKey, baseURL, model, maxTokens, extraBody, true)
+}
+
+// NewOpenAIProviderWithStreaming creates an OpenAI provider with streaming configuration.
+func NewOpenAIProviderWithStreaming(apiKey, baseURL, model string, maxTokens int, extraBody map[string]interface{}, streaming bool) (*OpenAIProvider, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("API key is required")
 	}
@@ -39,11 +45,17 @@ func NewOpenAIProvider(apiKey, baseURL, model string, maxTokens int, extraBody m
 	}
 
 	return &OpenAIProvider{
-		client:    openai.NewClient(clientOpts...),
-		model:     model,
-		maxTokens: maxTokens,
-		extraBody: copyExtraBody(extraBody),
+		client:           openai.NewClient(clientOpts...),
+		model:            model,
+		maxTokens:        maxTokens,
+		extraBody:        copyExtraBody(extraBody),
+		streamingEnabled: streaming,
 	}, nil
+}
+
+// SupportsStreaming returns whether streaming is enabled for this provider.
+func (p *OpenAIProvider) SupportsStreaming() bool {
+	return p.streamingEnabled
 }
 
 // Chat performs a chat completion request.
@@ -271,20 +283,20 @@ func parseOpenAIToolCalls(toolCalls []openai.ChatCompletionMessageToolCall) []To
 	return result
 }
 
+// assistantReasoningOptions 为每条 assistant 消息设置 reasoning_content。
+// Moonshot/Kimi 在开启 thinking 时要求带 tool_calls 的 assistant 消息必须包含该字段，缺则 400。
+// 有内容用内容，无内容用空字符串，避免 "reasoning_content is missing"。
 func assistantReasoningOptions(messages []Message) []option.RequestOption {
 	if len(messages) == 0 {
 		return nil
 	}
-
 	opts := make([]option.RequestOption, 0)
 	for i, msg := range messages {
 		if msg.Role != "assistant" {
 			continue
 		}
 		reasoning := strings.TrimSpace(msg.ReasoningContent)
-		if reasoning == "" {
-			continue
-		}
+		// 始终设置 reasoning_content，无则传 ""，满足 Moonshot thinking 对 tool call 消息的要求
 		opts = append(opts, option.WithJSONSet(fmt.Sprintf("messages.%d.reasoning_content", i), reasoning))
 	}
 	return opts
@@ -356,4 +368,120 @@ func (p *OpenAIProvider) extraBodyOptions() []option.RequestOption {
 		opts = append(opts, option.WithJSONSet(key, value))
 	}
 	return opts
+}
+
+// ChatStream performs a streaming chat completion request.
+func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, tools []ToolDefinition, callback StreamCallback, options ...ChatOption) error {
+	opts := &ChatOptions{
+		Model:       p.model,
+		Temperature: 0,
+		MaxTokens:   p.maxTokens,
+		Stream:      true,
+	}
+
+	for _, opt := range options {
+		opt(opts)
+	}
+
+	openAIMessages, err := convertMessagesToOpenAI(messages)
+	if err != nil {
+		return fmt.Errorf("failed to convert messages: %w", err)
+	}
+
+	req := openai.ChatCompletionNewParams{
+		Model:    shared.ChatModel(opts.Model),
+		Messages: openAIMessages,
+	}
+	if opts.Temperature > 0 {
+		req.Temperature = openai.Float(opts.Temperature)
+	}
+	if opts.MaxTokens > 0 {
+		req.MaxTokens = openai.Int(int64(opts.MaxTokens))
+	}
+	if len(tools) > 0 {
+		req.Tools = convertToolsToOpenAI(tools)
+	}
+
+	reqOpts := append(p.extraBodyOptions(), assistantReasoningOptions(messages)...)
+
+	stream := p.client.Chat.Completions.NewStreaming(ctx, req, reqOpts...)
+
+	// 累积工具调用
+	toolCallsMap := make(map[int]*ToolCall)
+	var content strings.Builder
+
+	for stream.Next() {
+		chunk := stream.Current()
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+
+		delta := chunk.Choices[0].Delta
+
+		// 处理文本内容
+		if delta.Content != "" {
+			content.WriteString(delta.Content)
+			callback(StreamChunk{
+				Content: delta.Content,
+				Done:    false,
+			})
+		}
+
+		// 处理工具调用
+		for _, tc := range delta.ToolCalls {
+			idx := int(tc.Index)
+			if _, exists := toolCallsMap[idx]; !exists {
+				toolCallsMap[idx] = &ToolCall{
+					ID:   tc.ID,
+					Name: tc.Function.Name,
+				}
+			}
+			// 累积参数
+			if tc.Function.Arguments != "" {
+				existing := toolCallsMap[idx]
+				if existing.rawArgs == "" {
+					existing.rawArgs = tc.Function.Arguments
+				} else {
+					existing.rawArgs += tc.Function.Arguments
+				}
+			}
+		}
+
+		// 检查是否完成
+		if chunk.Choices[0].FinishReason != "" {
+			break
+		}
+	}
+
+	if err := stream.Err(); err != nil {
+		return fmt.Errorf("stream error: %w", err)
+	}
+
+	// 解析工具调用参数
+	var toolCalls []ToolCall
+	for i := 0; i < len(toolCallsMap); i++ {
+		tc := toolCallsMap[i]
+		if tc != nil {
+			if tc.rawArgs != "" {
+				var params map[string]interface{}
+				if err := json.Unmarshal([]byte(tc.rawArgs), &params); err != nil {
+					logger.Error("Failed to unmarshal streaming tool arguments",
+						zap.String("tool", tc.Name),
+						zap.Error(err))
+					params = map[string]interface{}{}
+				}
+				tc.Params = params
+			}
+			toolCalls = append(toolCalls, *tc)
+		}
+	}
+
+	// 发送完成信号
+	callback(StreamChunk{
+		Content:   content.String(),
+		Done:      true,
+		ToolCalls: toolCalls,
+	})
+
+	return nil
 }

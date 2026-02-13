@@ -82,10 +82,17 @@ func (a *SubagentAnnouncer) RunAnnounceFlow(params *SubagentAnnounceParams) erro
 	// 构建统计信息
 	statsLine := a.buildStatsLine(params)
 
+	// 若有 artifacts，追加摘要行
+	artifactsLine := ""
+	if params.Outcome != nil && len(params.Outcome.Artifacts) > 0 {
+		artifactsLine = "\nArtifacts: " + fmt.Sprintf("%d item(s)", len(params.Outcome.Artifacts))
+	}
+
 	// 构建宣告消息
 	triggerMessage := fmt.Sprintf(`A %s "%s" just %s.
 
 Findings:
+%s
 %s
 
 %s
@@ -93,7 +100,7 @@ Findings:
 Summarize this naturally for the user. Keep it brief (1-2 sentences). Flow it into the conversation naturally.
 Do not mention technical details like tokens, stats, or that this was a %s.
 You can respond with NO_REPLY if no announcement is needed (e.g., internal task with no user-facing result).`,
-		announceType, taskLabel, statusLabel, params.Task, statsLine, announceType)
+		announceType, taskLabel, statusLabel, params.Task, artifactsLine, statsLine, announceType)
 
 	// 发送宣告到主 Agent
 	if err := a.onAnnounce(params.RequesterSessionKey, triggerMessage); err != nil {

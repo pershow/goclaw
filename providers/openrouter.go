@@ -13,13 +13,19 @@ import (
 
 // OpenRouterProvider OpenRouter 提供商
 type OpenRouterProvider struct {
-	llm       llms.Model
-	model     string
-	maxTokens int
+	llm               llms.Model
+	model             string
+	maxTokens         int
+	streamingEnabled  bool // 配置项，当前实现暂不支持流式，预留
 }
 
-// NewOpenRouterProvider 创建 OpenRouter 提供商
+// NewOpenRouterProvider 创建 OpenRouter 提供商（默认启用流式配置，实际流式需后续实现）
 func NewOpenRouterProvider(apiKey, baseURL, model string, maxTokens int) (*OpenRouterProvider, error) {
+	return NewOpenRouterProviderWithStreaming(apiKey, baseURL, model, maxTokens, true)
+}
+
+// NewOpenRouterProviderWithStreaming 创建 OpenRouter 提供商并指定是否启用流式（预留，当前未实现流式）
+func NewOpenRouterProviderWithStreaming(apiKey, baseURL, model string, maxTokens int, streaming bool) (*OpenRouterProvider, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("API key is required")
 	}
@@ -42,9 +48,10 @@ func NewOpenRouterProvider(apiKey, baseURL, model string, maxTokens int) (*OpenR
 	}
 
 	return &OpenRouterProvider{
-		llm:       llm,
-		model:     model,
-		maxTokens: maxTokens,
+		llm:              llm,
+		model:            model,
+		maxTokens:        maxTokens,
+		streamingEnabled: streaming,
 	}, nil
 }
 
@@ -186,4 +193,9 @@ func (p *OpenRouterProvider) ChatWithTools(ctx context.Context, messages []Messa
 // Close 关闭连接
 func (p *OpenRouterProvider) Close() error {
 	return nil
+}
+
+// SupportsStreaming returns whether streaming is enabled for this provider (config); actual streaming not yet implemented.
+func (p *OpenRouterProvider) SupportsStreaming() bool {
+	return p.streamingEnabled // 配置项；实际流式输出暂未实现
 }

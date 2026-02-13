@@ -9,13 +9,14 @@ import (
 
 // StreamChunk represents a chunk of streaming response
 type StreamChunk struct {
-	Content     string    `json:"content"`
-	Done        bool      `json:"done"`
-	ToolCall    *ToolCall `json:"tool_call,omitempty"`
-	ThinkingTag string    `json:"thinking,omitempty"`
-	IsThinking  bool      `json:"is_thinking,omitempty"`
-	IsFinal     bool      `json:"is_final,omitempty"`
-	Error       error     `json:"error,omitempty"`
+	Content     string     `json:"content"`
+	Done        bool       `json:"done"`
+	ToolCall    *ToolCall  `json:"tool_call,omitempty"`
+	ToolCalls   []ToolCall `json:"tool_calls,omitempty"` // 完成时的所有工具调用
+	ThinkingTag string     `json:"thinking,omitempty"`
+	IsThinking  bool       `json:"is_thinking,omitempty"`
+	IsFinal     bool       `json:"is_final,omitempty"`
+	Error       error      `json:"error,omitempty"`
 }
 
 // StreamCallback is called for each chunk in a streaming response

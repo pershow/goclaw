@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/smallnest/goclaw/config"
+	"github.com/smallnest/goclaw/internal"
 	"github.com/smallnest/goclaw/session"
 	"github.com/spf13/cobra"
 )
@@ -74,16 +76,30 @@ type SystemStatus struct {
 
 // runStatus displays status information
 func runStatus(cmd *cobra.Command, args []string) {
-	// Create status object
+	// Session 目录与 goclaw start 一致：优先配置 session.store，否则 ~/.goclaw/sessions（Windows 下用 UserHomeDir）
+	sessionDir := filepath.Join(internal.GetGoclawDir(), "sessions")
+	cfg, _ := config.Load("")
+	if cfg != nil && cfg.Session.Store != "" {
+		sessionDir = cfg.Session.Store
+	}
+	sessionMgr, err := session.NewManager(sessionDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to create session manager: %v\n", err)
+	} else if cfg != nil && cfg.Session.Reset != nil {
+		p := session.ToResetPolicy(&session.SessionResetConfigLike{
+			Mode: cfg.Session.Reset.Mode, AtHour: cfg.Session.Reset.AtHour, IdleMinutes: cfg.Session.Reset.IdleMinutes,
+		})
+		sessionMgr.SetResetPolicy(&p)
+	}
 	status := &SystemStatus{
-		SessionDir: filepath.Join(os.Getenv("HOME"), ".goclaw", "sessions"),
+		SessionDir: sessionDir,
 	}
 
 	// Check gateway status
 	status.Gateway = checkGatewayStatus(statusTimeout)
 
 	// Get session information
-	if err := getSessionStatus(status, statusAll, statusDeep); err != nil {
+	if err := getSessionStatus(status, sessionMgr, statusAll, statusDeep); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to get session status: %v\n", err)
 	}
 
@@ -138,13 +154,10 @@ func checkGatewayStatus(timeout int) GatewayStatus {
 }
 
 // getSessionStatus retrieves session status information
-func getSessionStatus(status *SystemStatus, all bool, deep bool) error {
-	// Create session manager
-	sessionMgr, err := session.NewManager(status.SessionDir)
-	if err != nil {
-		return err
+func getSessionStatus(status *SystemStatus, sessionMgr *session.Manager, all bool, deep bool) error {
+	if sessionMgr == nil {
+		return nil
 	}
-
 	// List sessions
 	sessionKeys, err := sessionMgr.List()
 	if err != nil {
@@ -228,6 +241,9 @@ func outputStatusText(status *SystemStatus) {
 	fmt.Printf("\nSessions (%d total):\n", status.SessionCount)
 	if len(status.Sessions) == 0 {
 		fmt.Println("  No sessions found")
+		fmt.Printf("  Session dir: %s\n", status.SessionDir)
+		fmt.Println("  Tip: Session files must be *.jsonl in that directory (e.g. web:abc.jsonl).")
+		fmt.Println("       Leftover *.jsonl.tmp from interrupted saves are auto-recovered when listing.")
 	} else {
 		for i, sess := range status.Sessions {
 			fmt.Printf("  %d. %s\n", i+1, sess.Key)
@@ -267,7 +283,7 @@ func outputStatusText(status *SystemStatus) {
 	if statusVerbose {
 		fmt.Printf("\nVerbose Information:\n")
 		fmt.Printf("  Session Directory: %s\n", status.SessionDir)
-		fmt.Printf("  Configuration: %s\n", filepath.Join(os.Getenv("HOME"), ".goclaw", "config.yaml"))
+		fmt.Printf("  Configuration: %s\n", internal.GetConfigPath())
 	}
 
 	if statusDebug {

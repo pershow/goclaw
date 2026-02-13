@@ -166,6 +166,11 @@ func (m *Manager) DispatchOutbound(ctx context.Context) error {
 				zap.String("chat_id", msg.ChatID),
 				zap.Int("content_length", len(msg.Content)))
 
+			// websocket 由 gateway 自己广播到 Control UI，不在此注册
+			if msg.Channel == "websocket" {
+				continue
+			}
+
 			// 查找对应的通道
 			channel, ok := m.Get(msg.Channel)
 			if !ok {
