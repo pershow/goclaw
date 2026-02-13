@@ -50,7 +50,7 @@ func NewOpenAIProvider(apiKey, baseURL, model string, maxTokens int, extraBody m
 func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []ToolDefinition, options ...ChatOption) (*Response, error) {
 	opts := &ChatOptions{
 		Model:       p.model,
-		Temperature: 0.7,
+		Temperature: 0,
 		MaxTokens:   p.maxTokens,
 		Stream:      false,
 	}

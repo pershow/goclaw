@@ -221,6 +221,8 @@ func runAgent(cmd *cobra.Command, args []string) {
 		Model:        cfg.Agents.Defaults.Model,
 		Workspace:    workspace,
 		MaxIteration: cfg.Agents.Defaults.MaxIterations,
+		Temperature:  cfg.Agents.Defaults.Temperature,
+		MaxTokens:    cfg.Agents.Defaults.MaxTokens,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create agent: %v\n", err)

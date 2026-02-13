@@ -42,6 +42,8 @@ func NewTUIAgent(
 	contextBuilder *agent.ContextBuilder,
 	workspace string,
 	model string,
+	temperature float64,
+	maxTokens int,
 	maxIterations int,
 	skillsLoader *agent.SkillsLoader,
 ) (*TUIAgent, error) {
@@ -94,6 +96,8 @@ func NewTUIAgent(
 		Model:        model,
 		Workspace:    workspace,
 		MaxIteration: maxIterations,
+		Temperature:  temperature,
+		MaxTokens:    maxTokens,
 		SkillsLoader: skillsLoader,
 	})
 	if err != nil {
@@ -228,6 +232,8 @@ func runTUI(cmd *cobra.Command, args []string) {
 		contextBuilder,
 		workspace,
 		cfg.Agents.Defaults.Model,
+		cfg.Agents.Defaults.Temperature,
+		cfg.Agents.Defaults.MaxTokens,
 		maxIterations,
 		skillsLoader,
 	)
