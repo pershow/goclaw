@@ -215,11 +215,12 @@ type ProvidersConfig struct {
 
 // ProviderProfileConfig 提供商配置
 type ProviderProfileConfig struct {
-	Name     string `mapstructure:"name" json:"name"`
-	Provider string `mapstructure:"provider" json:"provider"` // openai, anthropic, openrouter
-	APIKey   string `mapstructure:"api_key" json:"api_key"`
-	BaseURL  string `mapstructure:"base_url" json:"base_url"`
-	Priority int    `mapstructure:"priority" json:"priority"`
+	Name      string                 `mapstructure:"name" json:"name"`
+	Provider  string                 `mapstructure:"provider" json:"provider"` // openai, anthropic, openrouter
+	APIKey    string                 `mapstructure:"api_key" json:"api_key"`
+	BaseURL   string                 `mapstructure:"base_url" json:"base_url"`
+	ExtraBody map[string]interface{} `mapstructure:"extra_body" json:"extra_body"`
+	Priority  int                    `mapstructure:"priority" json:"priority"`
 }
 
 // FailoverConfig 故障转移配置
@@ -246,9 +247,10 @@ type OpenRouterProviderConfig struct {
 
 // OpenAIProviderConfig OpenAI 配置
 type OpenAIProviderConfig struct {
-	APIKey  string `mapstructure:"api_key" json:"api_key"`
-	BaseURL string `mapstructure:"base_url" json:"base_url"`
-	Timeout int    `mapstructure:"timeout" json:"timeout"`
+	APIKey    string                 `mapstructure:"api_key" json:"api_key"`
+	BaseURL   string                 `mapstructure:"base_url" json:"base_url"`
+	Timeout   int                    `mapstructure:"timeout" json:"timeout"`
+	ExtraBody map[string]interface{} `mapstructure:"extra_body" json:"extra_body"`
 }
 
 // AnthropicProviderConfig Anthropic 配置

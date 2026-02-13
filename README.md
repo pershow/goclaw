@@ -195,7 +195,12 @@ goclaw 按以下顺序查找配置文件（找到第一个即使用）：
     "openai": {
       "api_key": "YOUR_OPENAI_API_KEY_HERE",
       "base_url": "https://api.deepseek.com",
-      "timeout": 30
+      "timeout": 30,
+      "extra_body": {
+        "reasoning": {
+          "enabled": false
+        }
+      }
     }
   },
   "channels": {

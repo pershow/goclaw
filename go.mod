@@ -15,6 +15,7 @@ require (
 	github.com/mafredri/cdp v0.30.0
 	github.com/manifoldco/promptui v0.9.0
 	github.com/open-dingtalk/dingtalk-stream-sdk-go v0.9.1
+	github.com/openai/openai-go v1.12.0
 	github.com/slack-go/slack v0.17.3
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.19.0
@@ -26,6 +27,8 @@ require (
 	google.golang.org/api v0.218.0
 	gopkg.in/yaml.v3 v3.0.1
 )
+
+require github.com/tidwall/sjson v1.2.5 // indirect
 
 require (
 	github.com/chzyer/readline v1.5.1 // indirect

@@ -39,7 +39,8 @@ This guide covers configuring goclaw, including new features like multi-provider
     "openai": {
       "api_key": "sk-...",
       "base_url": "https://api.openai.com/v1",
-      "timeout": 30
+      "timeout": 30,
+      "extra_body": {}
     },
     "anthropic": {
       "api_key": "sk-ant-...",
@@ -52,6 +53,51 @@ This guide covers configuring goclaw, including new features like multi-provider
       "timeout": 60,
       "max_retries": 3
     }
+  }
+}
+```
+
+### OpenAI `extra_body` passthrough
+
+For OpenAI-compatible providers, you can pass vendor-specific request fields via
+`providers.openai.extra_body`. Each key-value pair is merged into the outgoing
+chat completion request body.
+
+```json
+{
+  "providers": {
+    "openai": {
+      "api_key": "sk-...",
+      "base_url": "https://api.moonshot.cn/v1",
+      "extra_body": {
+        "reasoning": {
+          "enabled": false
+        }
+      }
+    }
+  }
+}
+```
+
+For provider profile failover mode, `extra_body` is also supported per profile:
+
+```json
+{
+  "providers": {
+    "profiles": [
+      {
+        "name": "kimi-main",
+        "provider": "openai",
+        "base_url": "https://api.moonshot.cn/v1",
+        "api_key": "sk-...",
+        "extra_body": {
+          "reasoning": {
+            "enabled": false
+          }
+        },
+        "priority": 1
+      }
+    ]
   }
 }
 ```
