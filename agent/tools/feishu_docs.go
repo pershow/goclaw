@@ -132,6 +132,29 @@ func (t *FeishuDocsTool) GetTools() []Tool {
 			t.readDocument,
 		),
 		NewBaseTool(
+			"feishu_doc_update",
+			"Update text content of an existing Feishu document block.",
+			map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"document_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Feishu document ID.",
+					},
+					"block_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Target block ID to update.",
+					},
+					"text": map[string]interface{}{
+						"type":        "string",
+						"description": "Replacement plain text content for the block.",
+					},
+				},
+				"required": []string{"document_id", "block_id", "text"},
+			},
+			t.updateDocument,
+		),
+		NewBaseTool(
 			"feishu_drive_list",
 			"List files in a Feishu Drive folder.",
 			map[string]interface{}{
@@ -288,6 +311,67 @@ func (t *FeishuDocsTool) readDocument(ctx context.Context, params map[string]int
 		}
 	}
 
+	return marshalToolResult(result)
+}
+
+func (t *FeishuDocsTool) updateDocument(ctx context.Context, params map[string]interface{}) (string, error) {
+	documentID, err := getRequiredStringParam(params, "document_id")
+	if err != nil {
+		return "", err
+	}
+	blockID, err := getRequiredStringParam(params, "block_id")
+	if err != nil {
+		return "", err
+	}
+	text, err := getRequiredStringParamAllowEmpty(params, "text")
+	if err != nil {
+		return "", err
+	}
+
+	textElement := larkdocx.NewTextElementBuilder().
+		TextRun(
+			larkdocx.NewTextRunBuilder().
+				Content(text).
+				Build(),
+		).
+		Build()
+
+	updateText := larkdocx.NewUpdateTextRequestBuilder().
+		Elements([]*larkdocx.TextElement{textElement}).
+		Build()
+
+	updateReq := larkdocx.NewUpdateBlockRequestBuilder().
+		UpdateText(updateText).
+		BlockId(blockID).
+		Build()
+
+	patchReq := larkdocx.NewPatchDocumentBlockReqBuilder().
+		DocumentId(documentID).
+		BlockId(blockID).
+		UpdateBlockRequest(updateReq).
+		Build()
+
+	patchResp, err := t.client.Docx.V1.DocumentBlock.Patch(ctx, patchReq)
+	if err != nil {
+		return "", fmt.Errorf("failed to update Feishu document block: %w", err)
+	}
+	if !patchResp.Success() {
+		return "", feishuAPIError(patchResp.Code, patchResp.Msg)
+	}
+
+	result := map[string]interface{}{
+		"document_id": documentID,
+		"block_id":    blockID,
+		"text":        text,
+	}
+	if patchResp.Data != nil {
+		if patchResp.Data.DocumentRevisionId != nil {
+			result["revision_id"] = *patchResp.Data.DocumentRevisionId
+		}
+		if patchResp.Data.ClientToken != nil {
+			result["client_token"] = *patchResp.Data.ClientToken
+		}
+	}
 	return marshalToolResult(result)
 }
 
@@ -448,6 +532,18 @@ func getOptionalStringParam(params map[string]interface{}, key string) (string, 
 		return "", fmt.Errorf("%s must be a string", key)
 	}
 	return strings.TrimSpace(stringValue), nil
+}
+
+func getRequiredStringParamAllowEmpty(params map[string]interface{}, key string) (string, error) {
+	value, exists := params[key]
+	if !exists || value == nil {
+		return "", fmt.Errorf("%s is required and must be a string", key)
+	}
+	stringValue, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string", key)
+	}
+	return stringValue, nil
 }
 
 func getOptionalIntParam(params map[string]interface{}, key string, defaultValue int) (int, error) {
