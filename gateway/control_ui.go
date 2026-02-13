@@ -22,6 +22,12 @@ func (s *Server) ServeControlUI(mux *http.ServeMux) error {
 		return err
 	}
 
+	// 读取 index.html 内容
+	indexHTML, err := fs.ReadFile(distFS, "index.html")
+	if err != nil {
+		return err
+	}
+
 	// 创建文件服务器
 	fileServer := http.FileServer(http.FS(distFS))
 
@@ -39,21 +45,25 @@ func (s *Server) ServeControlUI(mux *http.ServeMux) error {
 		// 清理路径
 		urlPath := path.Clean(r.URL.Path)
 
-		// 如果请求的是根路径或不包含扩展名，返回 index.html
+		// 如果请求的是根路径或不包含扩展名（SPA 路由），直接返回 index.html
 		if urlPath == "/" || urlPath == "" || !strings.Contains(path.Base(urlPath), ".") {
-			r.URL.Path = "/index.html"
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-cache")
+			logger.Debug("Serving index.html for SPA route",
+				zap.String("path", r.URL.Path))
+			w.Write(indexHTML)
+			return
 		}
 
 		// 设置缓存头
-		if strings.HasPrefix(urlPath, "/assets/") {
+		if strings.HasPrefix(r.URL.Path, "/assets/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		} else {
 			w.Header().Set("Cache-Control", "no-cache")
 		}
 
 		logger.Debug("Serving Control UI file",
-			zap.String("path", r.URL.Path),
-			zap.String("original", urlPath))
+			zap.String("path", r.URL.Path))
 
 		fileServer.ServeHTTP(w, r)
 	})
