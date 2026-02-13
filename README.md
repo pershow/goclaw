@@ -9,6 +9,7 @@ Go 语言版本的 OpenClaw - 一个功能强大的 AI Agent 框架。
 
 ## 功能特性
 
+- 🎨 **Web 控制界面 (New!)**：基于 Lit 的现代 Web UI，支持实时聊天、多视图导航、零依赖部署
 - 🛠️ **完整的工具系统**：FileSystem、Shell、Web、Browser，支持 Docker 沙箱与权限控制
 - 📚 **技能系统 (Skills)**：兼容 [OpenClaw](https://github.com/openclaw/openclaw) 和 [AgentSkills](https://agentskills.io) 规范，支持自动发现与环境准入控制 (Gating)
 - 💾 **持久化会话**：基于 JSONL 的会话存储，支持完整的工具调用链 (Tool Calls) 记录与恢复
@@ -19,7 +20,53 @@ Go 语言版本的 OpenClaw - 一个功能强大的 AI Agent 框架。
 - ⏰ **Cron 调度**：内置定时任务调度器
 - 🖥️ **Browser 自动化**：基于 Chrome DevTools Protocol 的浏览器控制
 
-## 技能系统 (New!)
+## 🎨 Web 控制界面 (New!)
+
+goclaw 现在提供了一个现代化的 Web 控制界面，让您可以通过浏览器与 AI Agent 交互。
+
+### 特性
+
+- ✅ **实时通信**：基于 WebSocket 的实时消息传输
+- ✅ **多视图导航**：Chat、Channels、Sessions、Config 多个视图
+- ✅ **响应式设计**：支持亮色/暗色主题，自适应布局
+- ✅ **零依赖部署**：UI 编译时嵌入到二进制文件，无需额外依赖
+- ✅ **自动重连**：网络断开自动恢复连接
+
+### 快速体验
+
+```bash
+# 方式 1: 使用演示脚本（推荐）
+./demo.sh  # 或 demo.bat (Windows)
+
+# 方式 2: 手动启动
+./goclaw gateway run --port 28789
+# 然后访问 http://localhost:28789/
+```
+
+### 开发 UI
+
+```bash
+# 构建 UI
+./build-ui.sh  # 或 build-ui.bat (Windows)
+
+# 开发模式（支持热重载）
+cd ui && npm run dev
+# 访问 http://localhost:5173/
+```
+
+### 技术栈
+
+- **前端**: Lit 3.3.2 (Web Components)
+- **构建**: Vite 7.3.1
+- **语言**: TypeScript
+- **后端**: Go embed.FS
+
+详细文档请参考：
+- [快速开始指南](QUICKSTART.md)
+- [前端移植文档](FRONTEND_MIGRATION.md)
+- [完整项目报告](MIGRATION_REPORT.md)
+
+## 技能系统
 
 goclaw 引入了先进的技能系统，允许用户通过编写 Markdown 文档 (`SKILL.md`) 来扩展 Agent 的能力。
 
@@ -238,8 +285,12 @@ goclaw 按以下顺序查找配置文件（找到第一个即使用）：
 ### 运行
 
 ```bash
-# 启动 Agent 服务
-./goclaw start
+# 启动 Web 控制界面（推荐）
+./goclaw gateway run --port 28789
+# 访问 http://localhost:28789/
+
+# 或使用演示脚本
+./demo.sh  # 或 demo.bat (Windows)
 
 # 交互式 TUI 模式
 ./goclaw tui
