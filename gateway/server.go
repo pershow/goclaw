@@ -177,6 +177,14 @@ func (s *Server) startHTTPServer(ctx context.Context) error {
 	// 通用 webhook 端点
 	mux.HandleFunc("/webhook/", s.handleGenericWebhook)
 
+	// WebSocket 端点（如果使用同一端口）
+	mux.HandleFunc(s.wsConfig.Path, s.handleWebSocket)
+
+	// 提供 Control UI
+	if err := s.ServeControlUI(mux); err != nil {
+		logger.Warn("Failed to serve Control UI", zap.Error(err))
+	}
+
 	// 创建 HTTP 服务器
 	s.server = &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", s.config.Host, s.config.Port),
@@ -201,6 +209,12 @@ func (s *Server) startHTTPServer(ctx context.Context) error {
 
 // startWebSocketServer 启动 WebSocket 服务器
 func (s *Server) startWebSocketServer(ctx context.Context) error {
+	// 如果 WebSocket 端口与 HTTP 端口相同，则复用 HTTP 服务器
+	if s.wsConfig.Port == s.config.Port && s.wsConfig.Host == s.config.Host {
+		logger.Info("WebSocket using same port as HTTP, skipping separate server")
+		return nil
+	}
+
 	// 创建 WebSocket 路由
 	mux := http.NewServeMux()
 
