@@ -711,8 +711,16 @@ func (m *AgentManager) publishToBus(ctx context.Context, channel, chatID, runID 
 	}
 }
 
-// publishStreamDelta 发布流式增量内容到总线
+// channelsThatSupportStreaming 仅这些通道会收到流式 delta；其他通道（如飞书、Telegram）只收到最终完整消息，避免刷屏
+var channelsThatSupportStreaming = map[string]bool{
+	"websocket": true, // Control UI 需要逐字展示
+}
+
+// publishStreamDelta 发布流式增量内容到总线（仅对支持流式的通道发送，飞书等只收最终消息）
 func (m *AgentManager) publishStreamDelta(ctx context.Context, channel, chatID, runID, delta string) {
+	if !channelsThatSupportStreaming[channel] {
+		return
+	}
 	outbound := &bus.OutboundMessage{
 		ID:        runID,
 		Channel:   channel,
