@@ -16,7 +16,7 @@ type DiscoveryOptions struct {
 	LoadSkillsOptions
 	// Additional options specific to discovery
 	WorkspaceDir string
-	PluginDirs    []string
+	PluginDirs   []string
 }
 
 // loadSkillsFromDir loads skills from a directory
@@ -108,7 +108,7 @@ func parseFrontmatter(content string) map[string]string {
 		return nil
 	}
 
-	yamlContent := content[4:endIdx+3]
+	yamlContent := content[4 : endIdx+3]
 	return parseYAML(yamlContent)
 }
 
@@ -334,9 +334,9 @@ func LoadSkillEntries(workspaceDir string, opts LoadSkillsOptions) ([]*SkillEntr
 		invocation := resolveSkillInvocationPolicy(frontmatter)
 
 		entries = append(entries, &SkillEntry{
-			Skill:           skill,
-			Frontmatter:     frontmatter,
-			Metadata:        metadata,
+			Skill:            skill,
+			Frontmatter:      frontmatter,
+			Metadata:         metadata,
 			InvocationPolicy: invocation,
 		})
 	}
@@ -353,7 +353,7 @@ func resolveOpenClawMetadata(frontmatter map[string]string) *OpenClawSkillMetada
 // resolveSkillInvocationPolicy determines skill invocation policy from frontmatter
 func resolveSkillInvocationPolicy(frontmatter map[string]string) *SkillInvocationPolicy {
 	policy := &SkillInvocationPolicy{
-		UserInvocable:        true,
+		UserInvocable:          true,
 		DisableModelInvocation: false,
 	}
 

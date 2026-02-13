@@ -298,8 +298,8 @@ func TestParseInstallSpec(t *testing.T) {
 			expected: nil,
 		},
 		{
-			name:  "nil input",
-			input: nil,
+			name:     "nil input",
+			input:    nil,
 			expected: nil,
 		},
 	}
@@ -559,7 +559,7 @@ func TestCoerceFrontmatterValue(t *testing.T) {
 		{
 			name:     "string with spaces",
 			input:    "  hello  ",
-			expected: "  hello  ",  // coerceFrontmatterValue doesn't trim spaces
+			expected: "  hello  ", // coerceFrontmatterValue doesn't trim spaces
 		},
 		{
 			name:     "boolean",

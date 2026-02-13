@@ -9,10 +9,10 @@ import (
 )
 
 var (
-	log        *zap.Logger
-	sugar      *zap.SugaredLogger
-	logMutex   sync.RWMutex
-	once       sync.Once
+	log         *zap.Logger
+	sugar       *zap.SugaredLogger
+	logMutex    sync.RWMutex
+	once        sync.Once
 	initialized bool
 )
 

@@ -110,8 +110,8 @@ Workspace content.`
 
 	// Load skill entries with both sources
 	entries, err := LoadSkillEntries(tmpDir, LoadSkillsOptions{
-		IncludeDefaults:    false,
-		ManagedSkillsDir:   managedDir,
+		IncludeDefaults:  false,
+		ManagedSkillsDir: managedDir,
 	})
 
 	if err != nil {
@@ -277,12 +277,12 @@ Content.`
 
 func TestResolveSkillInvocationPolicy(t *testing.T) {
 	tests := []struct {
-		name       string
+		name        string
 		frontmatter ParsedFrontmatter
-		expected   *SkillInvocationPolicy
+		expected    *SkillInvocationPolicy
 	}{
 		{
-			name:       "default values",
+			name:        "default values",
 			frontmatter: ParsedFrontmatter{},
 			expected: &SkillInvocationPolicy{
 				UserInvocable:          true,

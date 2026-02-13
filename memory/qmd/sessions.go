@@ -20,7 +20,7 @@ type SessionFile struct {
 
 // Message 消息格式
 type Message struct {
-	Role    string `json:"role"`  // "user" | "assistant" | "system"
+	Role    string `json:"role"` // "user" | "assistant" | "system"
 	Content string `json:"content"`
 }
 
@@ -88,10 +88,10 @@ func sanitizeText(text string) string {
 
 // 敏感信息正则表达式模式
 var (
-	apiKeyPattern    = regexp.MustCompile(`(?i)(api[_-]?key|apikey|secret|token)["\s:=]+([a-zA-Z0-9_\-]{16,})`)
-	passwordPattern  = regexp.MustCompile(`(?i)(password|passwd|pwd)["\s:=]+([^\s]+)`)
-	emailPattern     = regexp.MustCompile(`[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`)
-	phonePattern     = regexp.MustCompile(`1[3-9]\d{9}`) // 中国手机号
+	apiKeyPattern   = regexp.MustCompile(`(?i)(api[_-]?key|apikey|secret|token)["\s:=]+([a-zA-Z0-9_\-]{16,})`)
+	passwordPattern = regexp.MustCompile(`(?i)(password|passwd|pwd)["\s:=]+([^\s]+)`)
+	emailPattern    = regexp.MustCompile(`[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`)
+	phonePattern    = regexp.MustCompile(`1[3-9]\d{9}`) // 中国手机号
 )
 
 // redactAPIKeys 替换 API 密钥

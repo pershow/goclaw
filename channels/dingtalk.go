@@ -17,12 +17,12 @@ import (
 // DingTalkChannel DingTalk 通道实现
 type DingTalkChannel struct {
 	*BaseChannelImpl
-	config         config.DingTalkChannelConfig
-	clientID       string
-	clientSecret   string
-	streamClient   *client.StreamClient
-	ctx            context.Context
-	cancel         context.CancelFunc
+	config       config.DingTalkChannelConfig
+	clientID     string
+	clientSecret string
+	streamClient *client.StreamClient
+	ctx          context.Context
+	cancel       context.CancelFunc
 	// Map to store session webhooks for each chat
 	sessionWebhooks sync.Map // chatID -> sessionWebhook
 }
@@ -205,7 +205,7 @@ func (c *DingTalkChannel) onChatBotMessageReceived(ctx context.Context, data *ch
 			"sender_name":       senderNick,
 			"conversation_id":   data.ConversationId,
 			"conversation_type": data.ConversationType,
-			"platform":         "dingtalk",
+			"platform":          "dingtalk",
 			"session_webhook":   data.SessionWebhook,
 		},
 	}

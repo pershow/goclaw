@@ -57,11 +57,11 @@ func NewTUIAgent(
 
 	// Register shell tool
 	shellTool := tools.NewShellTool(
-		true, // enabled
-		[]string{}, // allowedCmds
-		[]string{}, // deniedCmds
-		120, // timeout
-		workspace, // workingDir
+		true,                   // enabled
+		[]string{},             // allowedCmds
+		[]string{},             // deniedCmds
+		120,                    // timeout
+		workspace,              // workingDir
 		config.SandboxConfig{}, // sandbox
 	)
 	for _, tool := range shellTool.GetTools() {

@@ -278,7 +278,7 @@ type DirectoryScanner interface {
 }
 
 // DefaultDirectoryScanner implements a basic directory scanner.
-type DefaultDirectoryScanner struct{
+type DefaultDirectoryScanner struct {
 	// IgnorePatterns is a list of patterns to ignore
 	IgnorePatterns []string
 }
@@ -422,7 +422,7 @@ type SkillFactory interface {
 }
 
 // DefaultFactory is the default implementation of SkillFactory.
-type DefaultFactory struct{
+type DefaultFactory struct {
 	// Config is the skills configuration
 	Config SkillsConfig
 }

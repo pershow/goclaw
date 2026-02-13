@@ -29,15 +29,15 @@ type SubagentRunOutcome struct {
 
 // SubagentRunParams 分身运行参数
 type SubagentRunParams struct {
-	RunID                 string
-	ChildSessionKey       string
-	RequesterSessionKey   string
-	RequesterOrigin       *DeliveryContext
-	RequesterDisplayKey   string
-	Task                  string
-	Cleanup               string
-	Label                 string
-	ArchiveAfterMinutes   int
+	RunID               string
+	ChildSessionKey     string
+	RequesterSessionKey string
+	RequesterOrigin     *DeliveryContext
+	RequesterDisplayKey string
+	Task                string
+	Cleanup             string
+	Label               string
+	ArchiveAfterMinutes int
 }
 
 // SubagentSystemPromptParams 系统提示词参数
@@ -144,26 +144,25 @@ func GenerateRunID() string {
 
 // End SubagentTypes
 
-
 // SubagentSpawnToolParams 分身生成工具参数
 type SubagentSpawnToolParams struct {
-	Task            string `json:"task"`                        // 任务描述（必填）
-	Label           string `json:"label,omitempty"`              // 可选标签
-	AgentID         string `json:"agent_id,omitempty"`           // 目标 Agent ID
-	Model           string `json:"model,omitempty"`              // 模型覆盖
-	Thinking        string `json:"thinking,omitempty"`           // 思考级别
+	Task              string `json:"task"`                          // 任务描述（必填）
+	Label             string `json:"label,omitempty"`               // 可选标签
+	AgentID           string `json:"agent_id,omitempty"`            // 目标 Agent ID
+	Model             string `json:"model,omitempty"`               // 模型覆盖
+	Thinking          string `json:"thinking,omitempty"`            // 思考级别
 	RunTimeoutSeconds int    `json:"run_timeout_seconds,omitempty"` // 超时时间
-	Cleanup         string `json:"cleanup,omitempty"`             // 清理策略
+	Cleanup           string `json:"cleanup,omitempty"`             // 清理策略
 }
 
 // SubagentSpawnResult 分身生成结果
 type SubagentSpawnResult struct {
-	Status           string  `json:"status"`                     // accepted, forbidden, error
-	ChildSessionKey  string  `json:"child_session_key,omitempty"`
-	RunID            string  `json:"run_id,omitempty"`
-	Error            string  `json:"error,omitempty"`
-	ModelApplied     bool    `json:"model_applied,omitempty"`
-	Warning          string  `json:"warning,omitempty"`
+	Status          string `json:"status"` // accepted, forbidden, error
+	ChildSessionKey string `json:"child_session_key,omitempty"`
+	RunID           string `json:"run_id,omitempty"`
+	Error           string `json:"error,omitempty"`
+	ModelApplied    bool   `json:"model_applied,omitempty"`
+	Warning         string `json:"warning,omitempty"`
 }
 
 // SubagentRegistryInterface 分身注册表接口
@@ -339,15 +338,15 @@ func (t *SubagentSpawnTool) Execute(ctx context.Context, params map[string]inter
 
 	// 注册分身运行
 	if err := t.registry.RegisterRun(&SubagentRunParams{
-		RunID:                 runID,
-		ChildSessionKey:       childSessionKey,
-		RequesterSessionKey:   requesterSessionKey,
-		RequesterOrigin:       requesterOrigin,
-		RequesterDisplayKey:   requesterSessionKey,
-		Task:                  spawnParams.Task,
-		Cleanup:               spawnParams.Cleanup,
-		Label:                 spawnParams.Label,
-		ArchiveAfterMinutes:   archiveAfterMinutes,
+		RunID:               runID,
+		ChildSessionKey:     childSessionKey,
+		RequesterSessionKey: requesterSessionKey,
+		RequesterOrigin:     requesterOrigin,
+		RequesterDisplayKey: requesterSessionKey,
+		Task:                spawnParams.Task,
+		Cleanup:             spawnParams.Cleanup,
+		Label:               spawnParams.Label,
+		ArchiveAfterMinutes: archiveAfterMinutes,
 	}); err != nil {
 		result := &SubagentSpawnResult{
 			Status: "error",

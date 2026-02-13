@@ -213,7 +213,7 @@ func getChannelStatusFromGateway(channelName string, timeout int) map[string]int
 			// All channels
 			var result struct {
 				Channels []map[string]interface{} `json:"channels"`
-				Count    int                       `json:"count"`
+				Count    int                      `json:"count"`
 			}
 			if err := json.Unmarshal(body, &result); err != nil {
 				continue

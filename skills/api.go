@@ -9,10 +9,10 @@ import (
 
 // API provides gateway-style API methods for skill management
 type API struct {
-	Loader       SkillLoader
-	Config       SkillsConfig
-	WorkspaceDir string
-	AgentDir     string
+	Loader        SkillLoader
+	Config        SkillsConfig
+	WorkspaceDir  string
+	AgentDir      string
 	StatusBuilder *StatusBuilder
 }
 
@@ -37,7 +37,7 @@ type SkillsStatusRequest struct {
 type SkillsStatusResponse struct {
 	Success bool               `json:"success"`
 	Data    *SkillStatusReport `json:"data,omitempty"`
-	Error   *string           `json:"error,omitempty"`
+	Error   *string            `json:"error,omitempty"`
 }
 
 // Status builds a complete skill status report
@@ -72,19 +72,19 @@ type SkillsBinsRequest struct {
 
 // SkillsBinsResponse represents the response from skills.bins API
 type SkillsBinsResponse struct {
-	Success bool     `json:"success"`
+	Success bool `json:"success"`
 	Data    struct {
 		Bins []string `json:"bins"`
 	} `json:"data,omitempty"`
-	Error *string   `json:"error,omitempty"`
+	Error *string `json:"error,omitempty"`
 }
 
 // Bins collects all unique binaries required by loaded skills
 func (a *API) Bins(ctx context.Context, req SkillsBinsRequest) SkillsBinsResponse {
 	// Load all skills to collect binaries
 	opts := LoadSkillsOptions{
-		Cwd:              a.WorkspaceDir,
-		AgentDir:         a.AgentDir,
+		Cwd:             a.WorkspaceDir,
+		AgentDir:        a.AgentDir,
 		IncludeDefaults: true,
 	}
 
@@ -118,12 +118,12 @@ type SkillsInstallRequest struct {
 
 // SkillsInstallResponse represents the response from skills.install API
 type SkillsInstallResponse struct {
-	Success bool   `json:"success"`
+	Success bool `json:"success"`
 	Data    struct {
-		OK      bool    `json:"ok"`
-		Message string  `json:"message"`
+		OK      bool   `json:"ok"`
+		Message string `json:"message"`
 	} `json:"data,omitempty"`
-	Error   *string `json:"error,omitempty"`
+	Error *string `json:"error,omitempty"`
 }
 
 // Install installs a skill dependency
@@ -193,11 +193,11 @@ type SkillsUpdateRequest struct {
 type SkillsUpdateResponse struct {
 	Success bool `json:"success"`
 	Data    struct {
-		OK      bool               `json:"ok"`
-		SkillKey string            `json:"skillKey"`
-		Config   SkillEntryConfig  `json:"config"`
+		OK       bool             `json:"ok"`
+		SkillKey string           `json:"skillKey"`
+		Config   SkillEntryConfig `json:"config"`
 	} `json:"data,omitempty"`
-	Error   *string `json:"error,omitempty"`
+	Error *string `json:"error,omitempty"`
 }
 
 // Update updates skill configuration
@@ -212,8 +212,8 @@ func (a *API) Update(ctx context.Context, req SkillsUpdateRequest) SkillsUpdateR
 
 	// Load current skills
 	opts := LoadSkillsOptions{
-		Cwd:              a.WorkspaceDir,
-		AgentDir:         a.AgentDir,
+		Cwd:             a.WorkspaceDir,
+		AgentDir:        a.AgentDir,
 		IncludeDefaults: true,
 	}
 
@@ -229,7 +229,7 @@ func (a *API) Update(ctx context.Context, req SkillsUpdateRequest) SkillsUpdateR
 	var targetSkill *SkillEntry
 	for _, skill := range result.Skills {
 		entry := &SkillEntry{
-			Skill: skill,
+			Skill:       skill,
 			Frontmatter: skill.Frontmatter,
 			Metadata:    skill.Metadata,
 		}
@@ -296,7 +296,7 @@ func (a *API) Update(ctx context.Context, req SkillsUpdateRequest) SkillsUpdateR
 	return SkillsUpdateResponse{
 		Success: true,
 		Data: struct {
-			OK      bool              `json:"ok"`
+			OK       bool             `json:"ok"`
 			SkillKey string           `json:"skillKey"`
 			Config   SkillEntryConfig `json:"config"`
 		}{
@@ -350,8 +350,8 @@ func (a *API) cloneSkillsConfig() SkillsConfig {
 		AllowBundled: make([]string, len(a.Config.AllowBundled)),
 		Entries:      make(map[string]SkillEntryConfig),
 		Load: LoadConfig{
-			ExtraDirs:      make([]string, len(a.Config.Load.ExtraDirs)),
-			Watch:          a.Config.Load.Watch,
+			ExtraDirs:       make([]string, len(a.Config.Load.ExtraDirs)),
+			Watch:           a.Config.Load.Watch,
 			WatchDebounceMs: a.Config.Load.WatchDebounceMs,
 		},
 		Install: InstallConfig{

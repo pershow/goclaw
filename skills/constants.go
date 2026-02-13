@@ -22,18 +22,18 @@ const (
 	FieldDescription = "description"
 
 	// Optional core fields
-	FieldVersion     = "version"
-	FieldAuthor      = "author"
-	FieldHomepage    = "homepage"
-	FieldAlways      = "always"
-	FieldLicense     = "license"
+	FieldVersion       = "version"
+	FieldAuthor        = "author"
+	FieldHomepage      = "homepage"
+	FieldAlways        = "always"
+	FieldLicense       = "license"
 	FieldCompatibility = "compatibility"
-	FieldMetadata    = "metadata"
-	FieldAllowedTools = "allowed-tools"
+	FieldMetadata      = "metadata"
+	FieldAllowedTools  = "allowed-tools"
 
 	// Skill invocation control fields
 	FieldDisableModelInvocation = "disable-model-invocation"
-	FieldUserInvocable         = "user-invocable"
+	FieldUserInvocable          = "user-invocable"
 
 	// Command dispatch fields for slash commands
 	FieldCommandDispatch = "command-dispatch"
@@ -90,18 +90,18 @@ const (
 
 // Default skill file names (in priority order).
 var DefaultSkillFileNames = []string{
-	"SKILL.md",  // Primary format (per Agent Skills standard)
-	"skill.md",  // Alternative casing
+	"SKILL.md", // Primary format (per Agent Skills standard)
+	"skill.md", // Alternative casing
 }
 
 // Ignored directory patterns when scanning for skills.
 var IgnoredDirectoryPatterns = []string{
-	"node_modules", // Node.js dependencies
-	".git",         // Git metadata
-	".hg",          // Mercurial metadata
-	".svn",         // Subversion metadata
-	".DS_Store",    // macOS metadata
-	"__pycache__",  // Python cache
+	"node_modules",  // Node.js dependencies
+	".git",          // Git metadata
+	".hg",           // Mercurial metadata
+	".svn",          // Subversion metadata
+	".DS_Store",     // macOS metadata
+	"__pycache__",   // Python cache
 	".pytest_cache", // Python test cache
 }
 
@@ -129,9 +129,9 @@ var DefaultSkillSourceDirs = []struct {
 	Path     string
 	Priority int
 }{
-	{"workspace", "skills", 300},              // Current project skills (highest priority)
-	{"managed", "~/.goclaw/skills", 200},      // Global user skills
-	{"bundled", "<executable>/skills", 100},   // Built-in skills from package
+	{"workspace", "skills", 300},            // Current project skills (highest priority)
+	{"managed", "~/.goclaw/skills", 200},    // Global user skills
+	{"bundled", "<executable>/skills", 100}, // Built-in skills from package
 }
 
 // Skill discovery rules constants.
@@ -148,19 +148,19 @@ const (
 
 // Error messages for skill parsing and validation.
 const (
-	ErrMsgNameRequired         = "skill name is required"
-	ErrMsgNameLength           = "skill name exceeds maximum length of %d characters"
-	ErrMsgNameCharacters       = "skill name contains invalid characters (must be lowercase a-z, 0-9, hyphens only)"
-	ErrMsgNameHyphens          = "skill name must not start or end with a hyphen"
-	ErrMsgNameConsecutive      = "skill name must not contain consecutive hyphens"
-	ErrMsgNameMatchesDir       = "skill name must match parent directory name"
-	ErrMsgDescriptionRequired  = "skill description is required"
-	ErrMsgDescriptionLength    = "skill description exceeds maximum length of %d characters"
-	ErrMsgFrontmatterMissing   = "skill file must contain valid frontmatter"
-	ErrMsgFrontmatterParse     = "failed to parse skill frontmatter"
-	ErrMsgFileNotFound         = "skill file not found"
-	ErrMsgDirectoryNotFound    = "skill directory not found"
-	ErrMsgSkillDirectoryEmpty  = "skill directory is empty"
+	ErrMsgNameRequired        = "skill name is required"
+	ErrMsgNameLength          = "skill name exceeds maximum length of %d characters"
+	ErrMsgNameCharacters      = "skill name contains invalid characters (must be lowercase a-z, 0-9, hyphens only)"
+	ErrMsgNameHyphens         = "skill name must not start or end with a hyphen"
+	ErrMsgNameConsecutive     = "skill name must not contain consecutive hyphens"
+	ErrMsgNameMatchesDir      = "skill name must match parent directory name"
+	ErrMsgDescriptionRequired = "skill description is required"
+	ErrMsgDescriptionLength   = "skill description exceeds maximum length of %d characters"
+	ErrMsgFrontmatterMissing  = "skill file must contain valid frontmatter"
+	ErrMsgFrontmatterParse    = "failed to parse skill frontmatter"
+	ErrMsgFileNotFound        = "skill file not found"
+	ErrMsgDirectoryNotFound   = "skill directory not found"
+	ErrMsgSkillDirectoryEmpty = "skill directory is empty"
 )
 
 // Installation error messages.
@@ -240,8 +240,8 @@ const (
 // Environment configuration constants.
 const (
 	// Environment variables that control skill behavior
-	EnvAutoInstall         = "GOCLAW_SKILL_AUTO_INSTALL"
-	EnvSkillsDir          = "GOCLAW_SKILLS_DIR"
-	EnvSkillsExtraDirs    = "GOCLAW_SKILLS_EXTRA_DIRS"
-	EnvSkillsIgnoreDirs   = "GOCLAW_SKILLS_IGNORE_DIRS"
+	EnvAutoInstall      = "GOCLAW_SKILL_AUTO_INSTALL"
+	EnvSkillsDir        = "GOCLAW_SKILLS_DIR"
+	EnvSkillsExtraDirs  = "GOCLAW_SKILLS_EXTRA_DIRS"
+	EnvSkillsIgnoreDirs = "GOCLAW_SKILLS_IGNORE_DIRS"
 )

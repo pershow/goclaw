@@ -96,8 +96,8 @@ Use this skill for testing purposes.
 
 	// 8. Build command specs
 	cmdSpecs, err := BuildSkillCommandSpecs(workspaceDir, BuildCommandSpecsOptions{
-		Entries:               entries,
-		SkillsConfig:          &SkillsConfig{},
+		Entries:      entries,
+		SkillsConfig: &SkillsConfig{},
 	})
 	if err != nil {
 		t.Fatalf("failed to build command specs: %v", err)
@@ -533,8 +533,8 @@ func BenchmarkBuildSkillSnapshot(b *testing.B) {
 	}
 
 	opts := BuildSkillSnapshotOptions{
-		Entries:      entries,
-		SkillsConfig: &SkillsConfig{},
+		Entries:         entries,
+		SkillsConfig:    &SkillsConfig{},
 		SnapshotVersion: 1,
 	}
 

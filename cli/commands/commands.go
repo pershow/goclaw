@@ -38,24 +38,24 @@ type ArgSpec struct {
 
 // CommandRegistry 命令注册表
 type CommandRegistry struct {
-	commands    map[string]*Command
-	homeDir     string
-	menuMode    bool // 是否在菜单选择模式
-	sessionMgr  *session.Manager
-	stopped     bool // 停止标志，用于中止正在运行的 agent
-	toolGetter  func() (map[string]interface{}, error) // 获取工具列表的函数
-	skillsGetter func() ([]*SkillInfo, error)         // 获取技能列表的函数
+	commands     map[string]*Command
+	homeDir      string
+	menuMode     bool // 是否在菜单选择模式
+	sessionMgr   *session.Manager
+	stopped      bool                                   // 停止标志，用于中止正在运行的 agent
+	toolGetter   func() (map[string]interface{}, error) // 获取工具列表的函数
+	skillsGetter func() ([]*SkillInfo, error)           // 获取技能列表的函数
 }
 
 // SkillInfo 技能信息
 type SkillInfo struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Version     string   `json:"version"`
-	Author      string   `json:"author"`
-	Homepage    string   `json:"homepage"`
-	Always      bool     `json:"always"`
-	Emoji       string   `json:"emoji"`
+	Name        string           `json:"name"`
+	Description string           `json:"description"`
+	Version     string           `json:"version"`
+	Author      string           `json:"author"`
+	Homepage    string           `json:"homepage"`
+	Always      bool             `json:"always"`
+	Emoji       string           `json:"emoji"`
 	MissingDeps *MissingDepsInfo `json:"missing_deps,omitempty"`
 }
 
@@ -104,7 +104,7 @@ func (r *CommandRegistry) SetTUIAgent(agent *TUIAgent) {
 			result[t.Name()] = map[string]interface{}{
 				"name":        t.Name(),
 				"description": t.Description(),
-				"parameters": t.Parameters(),
+				"parameters":  t.Parameters(),
 			}
 		}
 		return result, nil
@@ -1073,4 +1073,3 @@ func (r *CommandRegistry) hasMissingDeps(deps *MissingDepsInfo) bool {
 		len(deps.PythonPkgs) > 0 || len(deps.NodePkgs) > 0 ||
 		len(deps.Env) > 0
 }
-

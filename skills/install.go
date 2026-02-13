@@ -30,13 +30,13 @@ type InstallRequest struct {
 
 // InstallResult represents the result of a skill installation
 type InstallResult struct {
-	Success    bool
-	Message    string
-	Stdout     string
-	Stderr     string
-	ExitCode   *int
-	Warnings   []string
-	Installed  []string // Installed binaries
+	Success   bool
+	Message   string
+	Stdout    string
+	Stderr    string
+	ExitCode  *int
+	Warnings  []string
+	Installed []string // Installed binaries
 }
 
 // Installer is the interface for installing skills

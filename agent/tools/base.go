@@ -21,7 +21,7 @@ func (t TextContent) ContentType() string {
 
 // ImageContent represents image content
 type ImageContent struct {
-	URL     string `json:"url,omitempty"`
+	URL      string `json:"url,omitempty"`
 	Data     string `json:"data,omitempty"` // base64
 	MimeType string `json:"mimeType,omitempty"`
 }
@@ -33,8 +33,8 @@ func (i ImageContent) ContentType() string {
 // ToolResult represents the result of a tool execution
 type ToolResult struct {
 	Content []ContentBlock `json:"content"`
-	Details map[string]any  `json:"details"`
-	Error   error           `json:"error,omitempty"`
+	Details map[string]any `json:"details"`
+	Error   error          `json:"error,omitempty"`
 }
 
 // Tool 工具接口

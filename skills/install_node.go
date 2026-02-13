@@ -122,7 +122,7 @@ func (n *NodeInstaller) isInstalled(ctx context.Context, manager, pkg string) bo
 	case "yarn":
 		argv = []string{manager, "global", "list"}
 	case "bun":
-			argv = []string{manager, "pm", "ls", "-g"}
+		argv = []string{manager, "pm", "ls", "-g"}
 	default: // npm
 		argv = []string{manager, "list", "-g", "--depth=0"}
 	}

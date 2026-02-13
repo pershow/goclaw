@@ -15,9 +15,9 @@ import (
 
 // Constants for skill command formatting
 const (
-	SkillCommandMaxLength              = 32
-	SkillCommandFallback               = "skill"
-	SkillCommandDescriptionMaxLength   = 100
+	SkillCommandMaxLength            = 32
+	SkillCommandFallback             = "skill"
+	SkillCommandDescriptionMaxLength = 100
 )
 
 // BuildWorkspaceSkillSnapshot creates a skill snapshot for an agent
@@ -102,7 +102,7 @@ func BuildWorkspaceSkillSnapshot(
 // BuildSkillSnapshotOptions configures snapshot building
 type BuildSkillSnapshotOptions struct {
 	ConfigMap        map[string]interface{} // Allow raw config for compatibility
-	SkillsConfig     *SkillsConfig         // Use typed config for easier access
+	SkillsConfig     *SkillsConfig          // Use typed config for easier access
 	ManagedSkillsDir string
 	BundledSkillsDir string
 	Entries          []*SkillEntry
@@ -114,7 +114,7 @@ type BuildSkillSnapshotOptions struct {
 // FilterSkillEntriesOptions configures skill entry filtering
 type FilterSkillEntriesOptions struct {
 	Config      map[string]interface{} // Allow raw config for compatibility
-	SkillConfig *SkillsConfig         // Use typed config when available
+	SkillConfig *SkillsConfig          // Use typed config when available
 	SkillFilter []string
 	Eligibility *SkillEligibilityContext
 }

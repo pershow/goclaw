@@ -30,13 +30,13 @@ type Skill struct {
 			Emoji    string `yaml:"emoji"`
 			Always   bool   `yaml:"always"`
 			Requires struct {
-				Bins         []string `yaml:"bins"`
-				AnyBins       []string `yaml:"anyBins"`
-				Env          []string `yaml:"env"`
-				Config       []string `yaml:"config"`
-				OS           []string `yaml:"os"`
-				PythonPkgs   []string `yaml:"pythonPkgs"`   // Python包依赖
-				NodePkgs     []string `yaml:"nodePkgs"`     // Node.js包依赖
+				Bins       []string `yaml:"bins"`
+				AnyBins    []string `yaml:"anyBins"`
+				Env        []string `yaml:"env"`
+				Config     []string `yaml:"config"`
+				OS         []string `yaml:"os"`
+				PythonPkgs []string `yaml:"pythonPkgs"` // Python包依赖
+				NodePkgs   []string `yaml:"nodePkgs"`   // Node.js包依赖
 			} `yaml:"requires"`
 			Install []SkillInstall `yaml:"install"`
 		} `yaml:"openclaw"`
@@ -53,7 +53,7 @@ type MissingDeps struct {
 	AnyBins    []string `yaml:"anyBins"`    // 缺失的可选二进制
 	Env        []string `yaml:"env"`        // 缺失的环境变量
 	PythonPkgs []string `yaml:"pythonPkgs"` // 缺失的Python包
-	NodePkgs   []string `yaml:"nodePkgs"`  // 缺失的Node.js包
+	NodePkgs   []string `yaml:"nodePkgs"`   // 缺失的Node.js包
 }
 
 // SkillRequirements 技能需求 (旧格式)

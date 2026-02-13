@@ -29,12 +29,12 @@ type QMDStatus struct {
 
 // QMDCollection QMD 集合配置
 type QMDCollection struct {
-	Name       string    `json:"name"`
-	Path       string    `json:"path"`
-	Pattern    string    `json:"pattern"`
-	CreatedAt  time.Time `json:"created_at"`
-	LastUpdate time.Time `json:"last_updated"`
-	DocumentCount int    `json:"document_count"`
+	Name          string    `json:"name"`
+	Path          string    `json:"path"`
+	Pattern       string    `json:"pattern"`
+	CreatedAt     time.Time `json:"created_at"`
+	LastUpdate    time.Time `json:"last_updated"`
+	DocumentCount int       `json:"document_count"`
 }
 
 // QMDConfig QMD 配置（从 config.MemoryConfig.QMD 映射）
@@ -64,18 +64,18 @@ type QMDSessionsConfig struct {
 
 // QMDUpdateConfig QMD 更新配置
 type QMDUpdateConfig struct {
-	Interval        time.Duration
-	OnBoot          bool
-	EmbedInterval   time.Duration
-	CommandTimeout  time.Duration
-	UpdateTimeout   time.Duration
+	Interval       time.Duration
+	OnBoot         bool
+	EmbedInterval  time.Duration
+	CommandTimeout time.Duration
+	UpdateTimeout  time.Duration
 }
 
 // QMDLimitsConfig QMD 搜索限制配置
 type QMDLimitsConfig struct {
-	MaxResults     int
+	MaxResults      int
 	MaxSnippetChars int
-	TimeoutMs      int
+	TimeoutMs       int
 }
 
 // DefaultQMDConfig 返回默认 QMD 配置
@@ -91,16 +91,16 @@ func DefaultQMDConfig() QMDConfig {
 			RetentionDays: 30,
 		},
 		Update: QMDUpdateConfig{
-			Interval:        5 * time.Minute,
-			OnBoot:          true,
-			EmbedInterval:   60 * time.Minute,
-			CommandTimeout:  30 * time.Second,
-			UpdateTimeout:   120 * time.Second,
+			Interval:       5 * time.Minute,
+			OnBoot:         true,
+			EmbedInterval:  60 * time.Minute,
+			CommandTimeout: 30 * time.Second,
+			UpdateTimeout:  120 * time.Second,
 		},
 		Limits: QMDLimitsConfig{
-			MaxResults:     6,
+			MaxResults:      6,
 			MaxSnippetChars: 700,
-			TimeoutMs:      4000,
+			TimeoutMs:       4000,
 		},
 	}
 }

@@ -12,26 +12,26 @@ import (
 
 // QMDManager 管理 QMD 进程和集合
 type QMDManager struct {
-	config          QMDConfig
-	workspace       string
-	agentID         string
-	mu              sync.RWMutex
-	collections     map[string]*QMDCollection
-	initialized     bool
+	config            QMDConfig
+	workspace         string
+	agentID           string
+	mu                sync.RWMutex
+	collections       map[string]*QMDCollection
+	initialized       bool
 	fallbackToBuiltin bool
-	lastError       error
-	lastUpdated     time.Time
-	lastEmbed       time.Time
+	lastError         error
+	lastUpdated       time.Time
+	lastEmbed         time.Time
 }
 
 // NewQMDManager 创建 QMD 管理器
 func NewQMDManager(config QMDConfig, workspace, agentID string) *QMDManager {
 	return &QMDManager{
-		config:          config,
-		workspace:       workspace,
-		agentID:         agentID,
-		collections:     make(map[string]*QMDCollection),
-		initialized:     false,
+		config:            config,
+		workspace:         workspace,
+		agentID:           agentID,
+		collections:       make(map[string]*QMDCollection),
+		initialized:       false,
 		fallbackToBuiltin: false,
 	}
 }

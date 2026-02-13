@@ -103,23 +103,23 @@ func TestShouldIncludeSkill_BundledAllowlist(t *testing.T) {
 
 func TestShouldIncludeSkill_OSCompatibility(t *testing.T) {
 	tests := []struct {
-		name     string
-		osList   []string
+		name       string
+		osList     []string
 		compatible bool
 	}{
 		{
-			name:     "matches current OS",
-			osList:   []string{runtime.GOOS},
+			name:       "matches current OS",
+			osList:     []string{runtime.GOOS},
 			compatible: true,
 		},
 		{
-			name:     "compatible with multiple OS",
-			osList:   []string{"darwin", "linux", "windows"},
+			name:       "compatible with multiple OS",
+			osList:     []string{"darwin", "linux", "windows"},
 			compatible: true,
 		},
 		{
-			name:     "incompatible OS",
-			osList:   []string{"unknown-os"},
+			name:       "incompatible OS",
+			osList:     []string{"unknown-os"},
 			compatible: false,
 		},
 	}
@@ -240,9 +240,9 @@ func TestShouldIncludeSkill_MissingEnv(t *testing.T) {
 
 func TestSkillEntry_IsEnabled(t *testing.T) {
 	tests := []struct {
-		name     string
-		config   SkillsConfig
-		enabled  bool
+		name    string
+		config  SkillsConfig
+		enabled bool
 	}{
 		{
 			name: "default enabled",
@@ -275,7 +275,7 @@ func TestSkillEntry_IsEnabled(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			entry := &SkillEntry{
 				Skill: &Skill{
-					Name: "test-skill",
+					Name:   "test-skill",
 					Source: "workspace",
 				},
 				Metadata: &OpenClawSkillMetadata{},
@@ -291,16 +291,16 @@ func TestSkillEntry_IsEnabled(t *testing.T) {
 
 func TestSkillEntry_PrimaryEnv(t *testing.T) {
 	tests := []struct {
-		name     string
-		metadata *OpenClawSkillMetadata
+		name        string
+		metadata    *OpenClawSkillMetadata
 		frontmatter ParsedFrontmatter
-		expected string
+		expected    string
 	}{
 		{
-			name:     "no metadata",
-			metadata: nil,
+			name:        "no metadata",
+			metadata:    nil,
 			frontmatter: ParsedFrontmatter{},
-			expected: "",
+			expected:    "",
 		},
 		{
 			name: "metadata with primary env",
@@ -308,7 +308,7 @@ func TestSkillEntry_PrimaryEnv(t *testing.T) {
 				PrimaryEnv: "node",
 			},
 			frontmatter: ParsedFrontmatter{},
-			expected: "node",
+			expected:    "node",
 		},
 	}
 
@@ -318,7 +318,7 @@ func TestSkillEntry_PrimaryEnv(t *testing.T) {
 				Skill: &Skill{
 					Name: "test-skill",
 				},
-				Metadata: tt.metadata,
+				Metadata:    tt.metadata,
 				Frontmatter: tt.frontmatter,
 			}
 
@@ -329,4 +329,3 @@ func TestSkillEntry_PrimaryEnv(t *testing.T) {
 		})
 	}
 }
-

@@ -22,41 +22,41 @@ type ParsedFrontmatter map[string]string
 // OpenClawSkillMetadata represents metadata extracted from the metadata.openclaw field.
 // This is compatible with openclaw skill format for cross-compatibility.
 type OpenClawSkillMetadata struct {
-	Always     bool                   `yaml:"always" json:"always"`
-	SkillKey   string                 `yaml:"skillKey" json:"skillKey"`
-	PrimaryEnv string                 `yaml:"primaryEnv" json:"primaryEnv"`
-	Emoji      string                 `yaml:"emoji" json:"emoji"`
-	Homepage   string                 `yaml:"homepage" json:"homepage"`
-	OS         []string               `yaml:"os" json:"os"`
-	Requires   *SkillRequires         `yaml:"requires" json:"requires"`
-	Install    []SkillInstallSpec     `yaml:"install" json:"install"`
+	Always     bool               `yaml:"always" json:"always"`
+	SkillKey   string             `yaml:"skillKey" json:"skillKey"`
+	PrimaryEnv string             `yaml:"primaryEnv" json:"primaryEnv"`
+	Emoji      string             `yaml:"emoji" json:"emoji"`
+	Homepage   string             `yaml:"homepage" json:"homepage"`
+	OS         []string           `yaml:"os" json:"os"`
+	Requires   *SkillRequires     `yaml:"requires" json:"requires"`
+	Install    []SkillInstallSpec `yaml:"install" json:"install"`
 }
 
 // SkillRequires defines requirements for a skill to function.
 type SkillRequires struct {
-	Bins     []string `yaml:"bins" json:"bins"`
-	AnyBins  []string `yaml:"anyBins" json:"anyBins"`
-	Env      []string `yaml:"env" json:"env"`
-	Config   []string `yaml:"config" json:"config"`
-	OS       []string `yaml:"os" json:"os"`
+	Bins    []string `yaml:"bins" json:"bins"`
+	AnyBins []string `yaml:"anyBins" json:"anyBins"`
+	Env     []string `yaml:"env" json:"env"`
+	Config  []string `yaml:"config" json:"config"`
+	OS      []string `yaml:"os" json:"os"`
 }
 
 // SkillInstallSpec defines how to install a dependency for a skill.
 type SkillInstallSpec struct {
-	ID             string   `yaml:"id" json:"id"`
-	Kind           string   `yaml:"kind" json:"kind"`
-	Type           string   `yaml:"type" json:"type"`              // Legacy alias for Kind
-	Label          string   `yaml:"label" json:"label"`
-	Bins           []string `yaml:"bins" json:"bins"`
-	OS             []string `yaml:"os" json:"os"`
-	Formula        string   `yaml:"formula" json:"formula"`
-	Package        string   `yaml:"package" json:"package"`
-	Module         string   `yaml:"module" json:"module"`
-	URL            string   `yaml:"url" json:"url"`
-	Archive        string   `yaml:"archive" json:"archive"`
-	Extract        bool     `yaml:"extract" json:"extract"`
-	StripComponents int     `yaml:"stripComponents" json:"stripComponents"`
-	TargetDir      string   `yaml:"targetDir" json:"targetDir"`
+	ID              string   `yaml:"id" json:"id"`
+	Kind            string   `yaml:"kind" json:"kind"`
+	Type            string   `yaml:"type" json:"type"` // Legacy alias for Kind
+	Label           string   `yaml:"label" json:"label"`
+	Bins            []string `yaml:"bins" json:"bins"`
+	OS              []string `yaml:"os" json:"os"`
+	Formula         string   `yaml:"formula" json:"formula"`
+	Package         string   `yaml:"package" json:"package"`
+	Module          string   `yaml:"module" json:"module"`
+	URL             string   `yaml:"url" json:"url"`
+	Archive         string   `yaml:"archive" json:"archive"`
+	Extract         bool     `yaml:"extract" json:"extract"`
+	StripComponents int      `yaml:"stripComponents" json:"stripComponents"`
+	TargetDir       string   `yaml:"targetDir" json:"targetDir"`
 }
 
 // SkillInvocationPolicy defines when and how a skill can be invoked.

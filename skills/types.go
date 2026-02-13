@@ -73,7 +73,7 @@ type SkillSnapshot struct {
 
 // SkillSummary provides minimal information about a skill for the initial prompt.
 type SkillSummary struct {
-	Name       string `json:"name"`
+	Name        string `json:"name"`
 	Description string `json:"description"`
 	PrimaryEnv  string `json:"primaryEnv,omitempty"`
 }
@@ -169,8 +169,8 @@ func DefaultSourcePriorities() SkillSourcePriority {
 	return SkillSourcePriority{
 		ExtraDirs: 0,
 		Bundled:   1,
-		Managed:    2,
-		Workspace:  3,
+		Managed:   2,
+		Workspace: 3,
 	}
 }
 

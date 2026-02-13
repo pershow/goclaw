@@ -244,8 +244,8 @@ func TestMagnitude(t *testing.T) {
 			expected: 0.0,
 		},
 		{
-			name:    "empty vector",
-			vec:     []float32{},
+			name:     "empty vector",
+			vec:      []float32{},
 			expected: 0,
 			wantErr:  true,
 		},
@@ -456,11 +456,11 @@ func TestMean(t *testing.T) {
 
 func TestVectorChunkText(t *testing.T) {
 	tests := []struct {
-		name         string
-		text         string
-		maxTokens    int
-		minChunks    int
-		maxChunks    int
+		name      string
+		text      string
+		maxTokens int
+		minChunks int
+		maxChunks int
 	}{
 		{
 			name:      "small text",

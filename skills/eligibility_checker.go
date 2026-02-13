@@ -27,7 +27,7 @@ func (c *DefaultEligibilityChecker) ShouldInclude(skill *SkillEntry, config Skil
 		for _, allowed := range config.AllowBundled {
 			if allowed == skill.Skill.Name {
 				return true
-		}
+			}
 		}
 		return false
 	}

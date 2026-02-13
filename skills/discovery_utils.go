@@ -50,7 +50,7 @@ func getSkillsConfig(cfg *config.Config) SkillsConfig {
 	// Parse Load config
 	if load, ok := skillsMap["load"].(map[string]interface{}); ok {
 		loadConfig := LoadConfig{
-			Watch:          false,
+			Watch:           false,
 			WatchDebounceMs: 500,
 		}
 		if enabled, ok := load["watch"].(bool); ok {

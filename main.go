@@ -9,10 +9,10 @@ import (
 
 // Version information, populated by goreleaser
 var (
-	Version   = "dev"
-	Commit    = "unknown"
-	Date      = "unknown"
-	BuiltBy   = "unknown"
+	Version = "dev"
+	Commit  = "unknown"
+	Date    = "unknown"
+	BuiltBy = "unknown"
 )
 
 func main() {

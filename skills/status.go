@@ -12,52 +12,52 @@ import (
 
 // SkillStatusConfigCheck represents a configuration check for a skill
 type SkillStatusConfigCheck struct {
-	Path       string      `json:"path"`
-	Value      interface{} `json:"value"`
-	Satisfied  bool        `json:"satisfied"`
+	Path      string      `json:"path"`
+	Value     interface{} `json:"value"`
+	Satisfied bool        `json:"satisfied"`
 }
 
 // SkillInstallOption represents an install option for a skill
 type SkillInstallOption struct {
-	ID    string `json:"id"`
-	Kind  string `json:"kind"`
-	Label string `json:"label"`
+	ID    string   `json:"id"`
+	Kind  string   `json:"kind"`
+	Label string   `json:"label"`
 	Bins  []string `json:"bins"`
 }
 
 // SkillStatusEntry represents the status of a single skill
 type SkillStatusEntry struct {
-	Name             string   `json:"name"`
-	Description      string   `json:"description"`
-	Source           string   `json:"source"`
-	Bundled          bool     `json:"bundled"`
-	FilePath         string   `json:"filePath"`
-	BaseDir          string   `json:"baseDir"`
-	SkillKey         string   `json:"skillKey"`
-	PrimaryEnv       *string   `json:"primaryEnv,omitempty"`
-	Emoji            *string   `json:"emoji,omitempty"`
-	Homepage         *string   `json:"homepage,omitempty"`
-	Always           bool     `json:"always"`
-	Disabled         bool     `json:"disabled"`
-	BlockedByAllowlist bool   `json:"blockedByAllowlist"`
-	Eligible         bool     `json:"eligible"`
+	Name               string  `json:"name"`
+	Description        string  `json:"description"`
+	Source             string  `json:"source"`
+	Bundled            bool    `json:"bundled"`
+	FilePath           string  `json:"filePath"`
+	BaseDir            string  `json:"baseDir"`
+	SkillKey           string  `json:"skillKey"`
+	PrimaryEnv         *string `json:"primaryEnv,omitempty"`
+	Emoji              *string `json:"emoji,omitempty"`
+	Homepage           *string `json:"homepage,omitempty"`
+	Always             bool    `json:"always"`
+	Disabled           bool    `json:"disabled"`
+	BlockedByAllowlist bool    `json:"blockedByAllowlist"`
+	Eligible           bool    `json:"eligible"`
 
 	// Requirements
 	Requirements struct {
-		Bins     []string `json:"bins"`
-		AnyBins  []string `json:"anyBins"`
-		Env      []string `json:"env"`
-		Config   []string `json:"config"`
-		OS       []string `json:"os"`
+		Bins    []string `json:"bins"`
+		AnyBins []string `json:"anyBins"`
+		Env     []string `json:"env"`
+		Config  []string `json:"config"`
+		OS      []string `json:"os"`
 	} `json:"requirements"`
 
 	// Missing dependencies
 	Missing struct {
-		Bins     []string `json:"bins"`
-		AnyBins  []string `json:"anyBins"`
-		Env      []string `json:"env"`
-		Config   []string `json:"config"`
-		OS       []string `json:"os"`
+		Bins    []string `json:"bins"`
+		AnyBins []string `json:"anyBins"`
+		Env     []string `json:"env"`
+		Config  []string `json:"config"`
+		OS      []string `json:"os"`
 	} `json:"missing"`
 
 	ConfigChecks []SkillStatusConfigCheck `json:"configChecks"`
@@ -66,9 +66,9 @@ type SkillStatusEntry struct {
 
 // SkillStatusReport represents a full status report
 type SkillStatusReport struct {
-	WorkspaceDir    string             `json:"workspaceDir"`
-	ManagedSkillsDir string            `json:"managedSkillsDir"`
-	Skills          []SkillStatusEntry `json:"skills"`
+	WorkspaceDir     string             `json:"workspaceDir"`
+	ManagedSkillsDir string             `json:"managedSkillsDir"`
+	Skills           []SkillStatusEntry `json:"skills"`
 }
 
 // StatusBuilder builds skill status reports
@@ -82,10 +82,10 @@ type StatusBuilder struct {
 // NewStatusBuilder creates a new status builder
 func NewStatusBuilder(loader SkillLoader, config SkillsConfig, workspaceDir, agentDir string) *StatusBuilder {
 	return &StatusBuilder{
-		Loader: loader,
-		Config: config,
+		Loader:       loader,
+		Config:       config,
 		WorkspaceDir: workspaceDir,
-		AgentDir: agentDir,
+		AgentDir:     agentDir,
 	}
 }
 
@@ -93,8 +93,8 @@ func NewStatusBuilder(loader SkillLoader, config SkillsConfig, workspaceDir, age
 func (b *StatusBuilder) BuildStatus(ctx context.Context) (*SkillStatusReport, error) {
 	// Load all skills
 	opts := LoadSkillsOptions{
-		Cwd:              b.WorkspaceDir,
-		AgentDir:         b.AgentDir,
+		Cwd:             b.WorkspaceDir,
+		AgentDir:        b.AgentDir,
 		IncludeDefaults: true,
 	}
 
@@ -130,7 +130,7 @@ func (b *StatusBuilder) BuildStatus(ctx context.Context) (*SkillStatusReport, er
 	return &SkillStatusReport{
 		WorkspaceDir:     b.WorkspaceDir,
 		ManagedSkillsDir: filepath.Join(b.AgentDir, "skills"),
-		Skills:          statusEntries,
+		Skills:           statusEntries,
 	}, nil
 }
 
@@ -157,19 +157,19 @@ func (b *StatusBuilder) buildSkillStatus(entry *SkillEntry) SkillStatusEntry {
 	installOptions := b.generateInstallOptions(entry)
 
 	status := SkillStatusEntry{
-		Name:              entry.Skill.Name,
-		Description:       entry.Skill.Description,
-		Source:            entry.Skill.Source,
-		Bundled:           entry.Skill.Source == "bundled",
-		FilePath:          entry.Skill.FilePath,
-		BaseDir:           entry.Skill.BaseDir,
-		SkillKey:          skillKey,
-		Always:            always,
-		Disabled:          disabled,
+		Name:               entry.Skill.Name,
+		Description:        entry.Skill.Description,
+		Source:             entry.Skill.Source,
+		Bundled:            entry.Skill.Source == "bundled",
+		FilePath:           entry.Skill.FilePath,
+		BaseDir:            entry.Skill.BaseDir,
+		SkillKey:           skillKey,
+		Always:             always,
+		Disabled:           disabled,
 		BlockedByAllowlist: blockedByAllowlist,
-		Eligible:          eligible,
-		Install:           installOptions,
-		ConfigChecks:      configChecks,
+		Eligible:           eligible,
+		Install:            installOptions,
+		ConfigChecks:       configChecks,
 	}
 
 	// Set optional fields
@@ -203,18 +203,18 @@ func (b *StatusBuilder) buildSkillStatus(entry *SkillEntry) SkillStatusEntry {
 
 // extractRequirements extracts requirements from skill metadata
 func (b *StatusBuilder) extractRequirements(entry *SkillEntry) struct {
-	Bins     []string
-	AnyBins  []string
-	Env      []string
-	Config   []string
-	OS       []string
+	Bins    []string
+	AnyBins []string
+	Env     []string
+	Config  []string
+	OS      []string
 } {
 	var requirements struct {
-		Bins     []string
-		AnyBins  []string
-		Env      []string
-		Config   []string
-		OS       []string
+		Bins    []string
+		AnyBins []string
+		Env     []string
+		Config  []string
+		OS      []string
 	}
 
 	if entry.Metadata != nil && entry.Metadata.Requires != nil {
@@ -235,25 +235,25 @@ func (b *StatusBuilder) extractRequirements(entry *SkillEntry) struct {
 func (b *StatusBuilder) checkMissingDependencies(
 	entry *SkillEntry,
 	requirements struct {
-		Bins     []string
-		AnyBins  []string
-		Env      []string
-		Config   []string
-		OS       []string
+		Bins    []string
+		AnyBins []string
+		Env     []string
+		Config  []string
+		OS      []string
 	},
 ) struct {
-	Bins     []string
-	AnyBins  []string
-	Env      []string
-	Config   []string
-	OS       []string
+	Bins    []string
+	AnyBins []string
+	Env     []string
+	Config  []string
+	OS      []string
 } {
 	var missing struct {
-		Bins     []string
-		AnyBins  []string
-		Env      []string
-		Config   []string
-		OS       []string
+		Bins    []string
+		AnyBins []string
+		Env     []string
+		Config  []string
+		OS      []string
 	}
 
 	// Check binary dependencies
@@ -331,11 +331,11 @@ func (b *StatusBuilder) checkEligibility(
 	blockedByAllowlist bool,
 	always bool,
 	missing struct {
-		Bins     []string
-		AnyBins  []string
-		Env      []string
-		Config   []string
-		OS       []string
+		Bins    []string
+		AnyBins []string
+		Env     []string
+		Config  []string
+		OS      []string
 	},
 ) bool {
 	// Check if explicitly disabled or blocked
@@ -408,10 +408,10 @@ func (b *StatusBuilder) selectPreferredInstallSpec(specs []SkillInstallSpec) *Sk
 			if spec.Kind == kind {
 				// Check if this package manager is available
 				if (kind == "brew" && !prefs.PreferBrew) ||
-				   func() bool {
-					   _, err := exec.LookPath(kind)
-					   return err != nil
-				   }() {
+					func() bool {
+						_, err := exec.LookPath(kind)
+						return err != nil
+					}() {
 					continue
 				}
 				return &spec

@@ -55,16 +55,16 @@ func (u *UVInstaller) Install(ctx context.Context, spec *SkillInstallSpec) Insta
 		stdout, stderr, exitCode, err := RunCommandWithTimeout(ctx, argv, nil)
 		if exitCode != nil && *exitCode != 0 {
 			return InstallResult{
-				Success: false,
-				Message: "Failed to install uv via brew",
+				Success:  false,
+				Message:  "Failed to install uv via brew",
 				Stdout:   stdout,
 				Stderr:   stderr,
 				ExitCode: exitCode,
 			}
 		} else if err != nil {
 			return InstallResult{
-				Success: false,
-				Message: fmt.Sprintf("Failed to install uv: %v", err),
+				Success:  false,
+				Message:  fmt.Sprintf("Failed to install uv: %v", err),
 				Stdout:   stdout,
 				Stderr:   stderr,
 				ExitCode: exitCode,

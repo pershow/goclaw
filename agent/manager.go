@@ -18,21 +18,21 @@ import (
 
 // AgentManager 管理多个 Agent 实例
 type AgentManager struct {
-	agents           map[string]*Agent      // agentID -> Agent
-	bindings         map[string]*BindingEntry // channel:accountID -> BindingEntry
-	defaultAgent     *Agent                  // 默认 Agent
-	bus              *bus.MessageBus
-	sessionMgr       *session.Manager
-	provider         providers.Provider
-	tools            *ToolRegistry
-	mu               sync.RWMutex
-	cfg              *config.Config
-	contextBuilder   *ContextBuilder
-	skillsLoader     *SkillsLoader
+	agents         map[string]*Agent        // agentID -> Agent
+	bindings       map[string]*BindingEntry // channel:accountID -> BindingEntry
+	defaultAgent   *Agent                   // 默认 Agent
+	bus            *bus.MessageBus
+	sessionMgr     *session.Manager
+	provider       providers.Provider
+	tools          *ToolRegistry
+	mu             sync.RWMutex
+	cfg            *config.Config
+	contextBuilder *ContextBuilder
+	skillsLoader   *SkillsLoader
 	// 分身支持
-	subagentRegistry *SubagentRegistry
+	subagentRegistry  *SubagentRegistry
 	subagentAnnouncer *SubagentAnnouncer
-	dataDir          string
+	dataDir           string
 }
 
 // BindingEntry Agent 绑定条目
@@ -45,13 +45,13 @@ type BindingEntry struct {
 
 // NewAgentManagerConfig AgentManager 配置
 type NewAgentManagerConfig struct {
-	Bus          *bus.MessageBus
-	Provider     providers.Provider
-	SessionMgr   *session.Manager
-	Tools        *ToolRegistry
-	DataDir      string       // 数据目录，用于存储分身注册表
+	Bus            *bus.MessageBus
+	Provider       providers.Provider
+	SessionMgr     *session.Manager
+	Tools          *ToolRegistry
+	DataDir        string          // 数据目录，用于存储分身注册表
 	ContextBuilder *ContextBuilder // 上下文构建器
-	SkillsLoader *SkillsLoader // 技能加载器
+	SkillsLoader   *SkillsLoader   // 技能加载器
 }
 
 // NewAgentManager 创建 Agent 管理器
@@ -63,17 +63,17 @@ func NewAgentManager(cfg *NewAgentManagerConfig) *AgentManager {
 	subagentAnnouncer := NewSubagentAnnouncer(nil) // 回调在 Start 中设置
 
 	return &AgentManager{
-		agents:           make(map[string]*Agent),
-		bindings:         make(map[string]*BindingEntry),
-		bus:              cfg.Bus,
-		sessionMgr:       cfg.SessionMgr,
-		provider:         cfg.Provider,
-		tools:            cfg.Tools,
-		subagentRegistry: subagentRegistry,
+		agents:            make(map[string]*Agent),
+		bindings:          make(map[string]*BindingEntry),
+		bus:               cfg.Bus,
+		sessionMgr:        cfg.SessionMgr,
+		provider:          cfg.Provider,
+		tools:             cfg.Tools,
+		subagentRegistry:  subagentRegistry,
 		subagentAnnouncer: subagentAnnouncer,
-		dataDir:          cfg.DataDir,
-		contextBuilder:   cfg.ContextBuilder,
-		skillsLoader:     cfg.SkillsLoader,
+		dataDir:           cfg.DataDir,
+		contextBuilder:    cfg.ContextBuilder,
+		skillsLoader:      cfg.SkillsLoader,
 	}
 }
 
@@ -245,15 +245,15 @@ func (a *subagentRegistryAdapter) RegisterRun(params *tools.SubagentRunParams) e
 	}
 
 	return a.registry.RegisterRun(&SubagentRunParams{
-		RunID:                 params.RunID,
-		ChildSessionKey:       params.ChildSessionKey,
-		RequesterSessionKey:   params.RequesterSessionKey,
-		RequesterOrigin:       requesterOrigin,
-		RequesterDisplayKey:   params.RequesterDisplayKey,
-		Task:                  params.Task,
-		Cleanup:               params.Cleanup,
-		Label:                 params.Label,
-		ArchiveAfterMinutes:   params.ArchiveAfterMinutes,
+		RunID:               params.RunID,
+		ChildSessionKey:     params.ChildSessionKey,
+		RequesterSessionKey: params.RequesterSessionKey,
+		RequesterOrigin:     requesterOrigin,
+		RequesterDisplayKey: params.RequesterDisplayKey,
+		Task:                params.Task,
+		Cleanup:             params.Cleanup,
+		Label:               params.Label,
+		ArchiveAfterMinutes: params.ArchiveAfterMinutes,
 	})
 }
 
@@ -728,7 +728,7 @@ func (m *AgentManager) GetToolsInfo() (map[string]interface{}, error) {
 		result[tool.Name()] = map[string]interface{}{
 			"name":        tool.Name(),
 			"description": tool.Description(),
-			"parameters": tool.Parameters(),
+			"parameters":  tool.Parameters(),
 		}
 	}
 

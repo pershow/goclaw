@@ -374,16 +374,16 @@ func runQMDIndex(workspace string, cfg *config.Config) {
 			RetentionDays: qmdCfg.Sessions.RetentionDays,
 		},
 		Update: qmd.QMDUpdateConfig{
-			Interval:        qmdCfg.Update.Interval,
-			OnBoot:          qmdCfg.Update.OnBoot,
-			EmbedInterval:   qmdCfg.Update.EmbedInterval,
-			CommandTimeout:  qmdCfg.Update.CommandTimeout,
-			UpdateTimeout:   qmdCfg.Update.UpdateTimeout,
+			Interval:       qmdCfg.Update.Interval,
+			OnBoot:         qmdCfg.Update.OnBoot,
+			EmbedInterval:  qmdCfg.Update.EmbedInterval,
+			CommandTimeout: qmdCfg.Update.CommandTimeout,
+			UpdateTimeout:  qmdCfg.Update.UpdateTimeout,
 		},
 		Limits: qmd.QMDLimitsConfig{
-			MaxResults:     qmdCfg.Limits.MaxResults,
+			MaxResults:      qmdCfg.Limits.MaxResults,
 			MaxSnippetChars: qmdCfg.Limits.MaxSnippetChars,
-			TimeoutMs:      qmdCfg.Limits.TimeoutMs,
+			TimeoutMs:       qmdCfg.Limits.TimeoutMs,
 		},
 	}
 

@@ -28,28 +28,28 @@ func TestFindInstallSpec(t *testing.T) {
 	}
 
 	tests := []struct {
-		name     string
+		name      string
 		installID string
-		kind     string
-		found    bool
+		kind      string
+		found     bool
 	}{
 		{
-			name:     "index default",
+			name:      "index default",
 			installID: "brew-0",
-			kind:     "brew",
-			found:    true,
+			kind:      "brew",
+			found:     true,
 		},
 		{
-			name:     "custom ID",
+			name:      "custom ID",
 			installID: "custom-id",
-			kind:     "node",
-			found:    true,
+			kind:      "node",
+			found:     true,
 		},
 		{
-			name:     "not found",
+			name:      "not found",
 			installID: "nonexistent",
-			kind:     "",
-			found:    false,
+			kind:      "",
+			found:     false,
 		},
 	}
 
@@ -102,10 +102,10 @@ func TestResolveInstallPreferences(t *testing.T) {
 
 func TestGetInstaller(t *testing.T) {
 	tests := []struct {
-		name     string
-		spec     SkillInstallSpec
-		prefs    InstallConfig
-		found    bool
+		name  string
+		spec  SkillInstallSpec
+		prefs InstallConfig
+		found bool
 	}{
 		{
 			name: "brew installer",

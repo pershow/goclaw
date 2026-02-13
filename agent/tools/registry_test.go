@@ -182,7 +182,7 @@ func TestRegistryExecuteNonexistent(t *testing.T) {
 func TestRegistryExecuteFailure(t *testing.T) {
 	r := NewRegistry()
 	tool := &failingTool{
-		mockTool: mockTool{name: "failing_tool"},
+		mockTool:  mockTool{name: "failing_tool"},
 		failError: errors.New("execution failed"),
 	}
 	_ = r.Register(tool)

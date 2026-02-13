@@ -14,10 +14,10 @@ import (
 // Orchestrator manages the agent execution loop
 // Based on pi-mono's agent-loop.ts design
 type Orchestrator struct {
-	config      *LoopConfig
-	state       *AgentState
-	eventChan   chan *Event
-	cancelFunc  context.CancelFunc
+	config     *LoopConfig
+	state      *AgentState
+	eventChan  chan *Event
+	cancelFunc context.CancelFunc
 }
 
 // NewOrchestrator creates a new agent orchestrator

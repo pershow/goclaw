@@ -133,7 +133,7 @@ func TestFilterPromptEntries(t *testing.T) {
 			},
 		},
 		{
-			Skill: &Skill{Name: "nil-policy"},
+			Skill:            &Skill{Name: "nil-policy"},
 			InvocationPolicy: nil,
 		},
 	}
@@ -197,7 +197,7 @@ func TestBuildSkillCommandSpecs_ToolDispatch(t *testing.T) {
 				Description: "A tool skill",
 			},
 			Frontmatter: ParsedFrontmatter{
-				"user-invocable":    "true",
+				"user-invocable":   "true",
 				"command-dispatch": "tool",
 				"command-tool":     "custom_tool",
 				"command-arg-mode": "raw",
@@ -209,8 +209,8 @@ func TestBuildSkillCommandSpecs_ToolDispatch(t *testing.T) {
 	}
 
 	opts := BuildCommandSpecsOptions{
-		Entries:       entries,
-		SkillsConfig:  &SkillsConfig{},
+		Entries:      entries,
+		SkillsConfig: &SkillsConfig{},
 	}
 
 	specs, err := BuildSkillCommandSpecs("/workspace", opts)

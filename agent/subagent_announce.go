@@ -253,18 +253,18 @@ func normalizeText(s string) string {
 
 // DefaultToolDenyList 默认拒绝的工具列表
 var DefaultToolDenyList = []string{
-	"sessions_spawn",      // 防止嵌套创建
-	"sessions_list",       // 会话管理 - 主 Agent 协调
+	"sessions_spawn", // 防止嵌套创建
+	"sessions_list",  // 会话管理 - 主 Agent 协调
 	"sessions_history",
 	"sessions_delete",
-	"gateway",             // 系统管理 - 分身不应操作
-	"cron",                // 定时任务
+	"gateway", // 系统管理 - 分身不应操作
+	"cron",    // 定时任务
 }
 
 // ResolveToolPolicy 解析工具策略
 func ResolveToolPolicy(denyTools []string, allowTools []string) *ToolPolicy {
 	policy := &ToolPolicy{
-		Deny: make(map[string]bool),
+		Deny:  make(map[string]bool),
 		Allow: make(map[string]bool),
 	}
 
@@ -343,7 +343,7 @@ func WaitForSubagentCompletion(runID string, timeoutSeconds int, waitFunc func(s
 
 // SubagentCompletion 分身完成结果
 type SubagentCompletion struct {
-	Status    string  // ok, error, timeout
+	Status    string // ok, error, timeout
 	StartedAt int64
 	EndedAt   int64
 	Error     string

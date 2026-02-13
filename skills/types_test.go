@@ -107,9 +107,9 @@ func TestDiagnostic_Validation(t *testing.T) {
 func TestSkillInstallResult_Validation(t *testing.T) {
 	t.Run("success result", func(t *testing.T) {
 		result := SkillInstallResult{
-			Success:   true,
-			InstallID: "brew-0",
-			Message:   "Installed successfully",
+			Success:       true,
+			InstallID:     "brew-0",
+			Message:       "Installed successfully",
 			InstalledBins: []string{"git", "node"},
 		}
 		if !result.Success {

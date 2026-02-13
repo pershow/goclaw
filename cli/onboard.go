@@ -12,10 +12,10 @@ import (
 )
 
 var (
-	onboardAPIKey     string
-	onboardBaseURL    string
-	onboardModel      string
-	onboardProvider   string
+	onboardAPIKey      string
+	onboardBaseURL     string
+	onboardModel       string
+	onboardProvider    string
 	onboardSkipPrompts bool
 )
 

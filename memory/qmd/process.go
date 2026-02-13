@@ -112,10 +112,10 @@ func GetQMDVersion(ctx context.Context, qmdPath string, timeout time.Duration) (
 
 // GetCollectionStats 获取集合统计信息
 type CollectionStats struct {
-	Name       string `json:"name"`
-	DocumentCount int  `json:"document_count"`
-	EmbeddingCount int `json:"embedding_count"`
-	LastUpdate string `json:"last_update"`
+	Name           string `json:"name"`
+	DocumentCount  int    `json:"document_count"`
+	EmbeddingCount int    `json:"embedding_count"`
+	LastUpdate     string `json:"last_update"`
 }
 
 func GetCollectionStats(ctx context.Context, qmdPath, name string, timeout time.Duration) (*CollectionStats, error) {

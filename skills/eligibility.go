@@ -13,8 +13,8 @@ type PatternFilter struct {
 	RawPatterns []string
 
 	// Compiled patterns
-	IncludePatterns    []*regexp.Regexp
-	ExcludePatterns    []*regexp.Regexp
+	IncludePatterns   []*regexp.Regexp
+	ExcludePatterns   []*regexp.Regexp
 	ForceIncludePaths []string
 	ForceExcludePaths []string
 
@@ -202,7 +202,7 @@ func (f *PatternFilter) pathMatches(filePath, patternPath string) bool {
 
 	// Directory contains pattern path or vice versa
 	return strings.Contains(absFilePath, absPatternPath) ||
-		   strings.Contains(absPatternPath, absFilePath)
+		strings.Contains(absPatternPath, absFilePath)
 }
 
 // PatternFilterConfig holds configuration for pattern-based filtering
@@ -265,9 +265,9 @@ func (f *PriorityFilter) extractPriority(metadata *OpenClawSkillMetadata) int {
 
 // CombinedFilter combines pattern and priority filtering
 type CombinedFilter struct {
-	PatternFilter *PatternFilter
+	PatternFilter  *PatternFilter
 	PriorityFilter *PriorityFilter
-	Config SkillsConfig
+	Config         SkillsConfig
 }
 
 // NewCombinedFilter creates a combined filter
@@ -280,9 +280,9 @@ func NewCombinedFilter(config SkillsConfig) *CombinedFilter {
 	}
 
 	return &CombinedFilter{
-		PatternFilter: NewPatternFilter(config.Load.ExtraPatterns),
+		PatternFilter:  NewPatternFilter(config.Load.ExtraPatterns),
 		PriorityFilter: NewPriorityFilter(patternConfig),
-		Config:        config,
+		Config:         config,
 	}
 }
 
@@ -366,6 +366,6 @@ func (f *PatternFilter) String() string {
 // IsEmpty checks if the filter has any active patterns
 func (f *PatternFilter) IsEmpty() bool {
 	return len(f.RawPatterns) == 0 &&
-		   len(f.ForceIncludePaths) == 0 &&
-		   len(f.ForceExcludePaths) == 0
+		len(f.ForceIncludePaths) == 0 &&
+		len(f.ForceExcludePaths) == 0
 }

@@ -7,13 +7,13 @@ import (
 // InboundMessage 入站消息
 type InboundMessage struct {
 	ID        string                 `json:"id"`
-	Channel   string                 `json:"channel"`   // telegram, whatsapp, feishu, cli, system
+	Channel   string                 `json:"channel"`    // telegram, whatsapp, feishu, cli, system
 	AccountID string                 `json:"account_id"` // 账号ID（用于多账号场景）
-	SenderID  string                 `json:"sender_id"` // 发送者ID
-	ChatID    string                 `json:"chat_id"`   // 聊天ID
-	Content   string                 `json:"content"`   // 消息内容
-	Media     []Media                `json:"media"`     // 媒体文件
-	Metadata  map[string]interface{} `json:"metadata"`  // 元数据
+	SenderID  string                 `json:"sender_id"`  // 发送者ID
+	ChatID    string                 `json:"chat_id"`    // 聊天ID
+	Content   string                 `json:"content"`    // 消息内容
+	Media     []Media                `json:"media"`      // 媒体文件
+	Metadata  map[string]interface{} `json:"metadata"`   // 元数据
 	Timestamp time.Time              `json:"timestamp"`
 }
 
