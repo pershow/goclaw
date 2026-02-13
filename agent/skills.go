@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/smallnest/goclaw/internal/logger"
+	"github.com/smallnest/goclaw/skills"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
@@ -153,7 +154,7 @@ func (l *SkillsLoader) loadSkill(path string) error {
 		return err
 	}
 
-	// 解析 YAML front matter
+	// 解析 YAML front matter（使用新解析器）
 	var skill Skill
 	if err := l.parseSkillMetadata(string(content), &skill); err != nil {
 		return err
@@ -165,11 +166,13 @@ func (l *SkillsLoader) loadSkill(path string) error {
 		return nil
 	}
 
+	// 如果新解析器已经提取了内容，使用它；否则回退到旧方法
+	if skill.Content == "" {
+		skill.Content = l.extractContent(string(content))
+	}
+
 	// 计算缺失的依赖（用于显示给LLM）
 	skill.MissingDeps = l.getMissingDeps(&skill)
-
-	// 保存内容（移除 YAML front matter）
-	skill.Content = l.extractContent(string(content))
 
 	// 使用目录名作为技能名
 	if skill.Name == "" {
@@ -212,9 +215,60 @@ func (l *SkillsLoader) checkBlockingRequirements(skill *Skill) bool {
 	return true
 }
 
-// parseSkillMetadata 解析技能元数据
+// parseSkillMetadata 解析技能元数据（支持新旧格式）
 func (l *SkillsLoader) parseSkillMetadata(content string, skill *Skill) error {
-	// 查找 YAML 分隔符
+	// 首先尝试使用新的 frontmatter 解析器
+	frontmatter := skills.ParseFrontmatter(content)
+	if frontmatter != nil && len(frontmatter) > 0 {
+		// 从 frontmatter 中解析基本字段
+		if name := frontmatter["name"]; name != "" {
+			skill.Name = name
+		}
+		if desc := frontmatter["description"]; desc != "" {
+			skill.Description = desc
+		}
+		if homepage := frontmatter["homepage"]; homepage != "" {
+			skill.Homepage = homepage
+		}
+		if always := frontmatter["always"]; always != "" {
+			skill.Always = always == "true"
+		}
+
+		// 解析 OpenClaw/goclaw 元数据
+		metadata := skills.ParseOpenClawMetadata(frontmatter)
+		if metadata != nil {
+			// 映射到旧的 Skill 结构
+			skill.Metadata.OpenClaw.Emoji = metadata.Emoji
+			skill.Metadata.OpenClaw.Always = metadata.Always
+			if metadata.Requires != nil {
+				skill.Metadata.OpenClaw.Requires.Bins = metadata.Requires.Bins
+				skill.Metadata.OpenClaw.Requires.AnyBins = metadata.Requires.AnyBins
+				skill.Metadata.OpenClaw.Requires.Env = metadata.Requires.Env
+				skill.Metadata.OpenClaw.Requires.Config = metadata.Requires.Config
+				skill.Metadata.OpenClaw.Requires.OS = metadata.Requires.OS
+			}
+
+			// 映射安装配置
+			for _, install := range metadata.Install {
+				skillInstall := SkillInstall{
+					ID:      install.ID,
+					Kind:    install.Kind,
+					Label:   install.Label,
+					Bins:    install.Bins,
+					OS:      install.OS,
+					Formula: install.Formula,
+					Package: install.Package,
+				}
+				skill.Metadata.OpenClaw.Install = append(skill.Metadata.OpenClaw.Install, skillInstall)
+			}
+		}
+
+		// 提取内容（移除 frontmatter）
+		skill.Content = skills.StripFrontmatter(content)
+		return nil
+	}
+
+	// 回退到旧的 YAML 解析方式
 	if !strings.HasPrefix(content, "---") {
 		return nil // 没有 YAML front matter
 	}
@@ -392,12 +446,21 @@ func (l *SkillsLoader) tryInstallBinary(skill *Skill, bin string) error {
 		cmd = exec.Command("brew", "install", installConfig.Formula)
 	case "apt", "apt-get":
 		cmd = exec.Command("sudo", "apt-get", "install", "-y", installConfig.Formula)
+	case "node":
+		// node kind: use configured node package manager (npm, pnpm, yarn, bun)
+		nodeManager := "npm" // default
+		if nm := os.Getenv("GOCLAW_NODE_MANAGER"); nm != "" {
+			nodeManager = nm
+		}
+		cmd = exec.Command(nodeManager, "install", "-g", installConfig.Package)
 	case "npm":
 		cmd = exec.Command("npm", "install", "-g", installConfig.Package)
 	case "pnpm":
 		cmd = exec.Command("pnpm", "add", "-g", installConfig.Package)
 	case "yarn":
 		cmd = exec.Command("yarn", "global", installConfig.Package)
+	case "bun":
+		cmd = exec.Command("bun", "install", "-g", installConfig.Package)
 	case "pip", "pip3":
 		cmd = exec.Command("pip3", "install", installConfig.Package)
 	case "uv":
@@ -482,8 +545,28 @@ func (l *SkillsLoader) isTerminal() bool {
 
 // refreshPath 刷新PATH
 func (l *SkillsLoader) refreshPath() error {
+	homeDir, _ := os.UserHomeDir()
+
 	// 获取当前shell路径并重新加载
-	shellPaths := []string{"/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin", "/opt/homebrew/opt/python3/bin"}
+	shellPaths := []string{
+		"/bin",
+		"/usr/bin",
+		"/usr/local/bin",
+		"/opt/homebrew/bin",
+		"/opt/homebrew/opt/python3/bin",
+	}
+
+	// 添加 Node.js 包管理器全局安装路径
+	if homeDir != "" {
+		shellPaths = append(shellPaths,
+			homeDir+"/.npm-global/bin",           // npm
+			homeDir+"/.local/share/pnpm",       // pnpm
+			homeDir+"/.yarn/bin",              // yarn
+			homeDir+"/.bun/bin",               // bun
+			"/opt/homebrew/lib/node_modules/bin", // npm (brew-installed node)
+		)
+	}
+
 	pathEnv := os.Getenv("PATH")
 	if pathEnv == "" {
 		pathEnv = strings.Join(shellPaths, ":")
