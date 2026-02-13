@@ -218,6 +218,7 @@ func runAgent(cmd *cobra.Command, args []string) {
 		SessionMgr:   sessionMgr,
 		Tools:        toolRegistry,
 		Context:      contextBuilder,
+		Model:        cfg.Agents.Defaults.Model,
 		Workspace:    workspace,
 		MaxIteration: cfg.Agents.Defaults.MaxIterations,
 	})

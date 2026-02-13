@@ -41,6 +41,7 @@ func NewTUIAgent(
 	provider providers.Provider,
 	contextBuilder *agent.ContextBuilder,
 	workspace string,
+	model string,
 	maxIterations int,
 	skillsLoader *agent.SkillsLoader,
 ) (*TUIAgent, error) {
@@ -90,6 +91,7 @@ func NewTUIAgent(
 		SessionMgr:   sessionMgr,
 		Tools:        toolRegistry,
 		Context:      contextBuilder,
+		Model:        model,
 		Workspace:    workspace,
 		MaxIteration: maxIterations,
 		SkillsLoader: skillsLoader,
@@ -219,7 +221,16 @@ func runTUI(cmd *cobra.Command, args []string) {
 		maxIterations = 15
 	}
 
-	tuiAgent, err := NewTUIAgent(messageBus, sessionMgr, provider, contextBuilder, workspace, maxIterations, skillsLoader)
+	tuiAgent, err := NewTUIAgent(
+		messageBus,
+		sessionMgr,
+		provider,
+		contextBuilder,
+		workspace,
+		cfg.Agents.Defaults.Model,
+		maxIterations,
+		skillsLoader,
+	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create TUI agent: %v\n", err)
 		os.Exit(1)

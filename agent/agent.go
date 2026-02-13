@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,6 +39,7 @@ type NewAgentConfig struct {
 	SessionMgr   *session.Manager
 	Tools        *ToolRegistry
 	Context      *ContextBuilder
+	Model        string
 	Workspace    string
 	MaxIteration int
 	Temperature  float64 // 0 表示使用 provider 默认
@@ -57,7 +59,7 @@ func NewAgent(cfg *NewAgentConfig) (*Agent, error) {
 
 	state := NewAgentState()
 	state.SystemPrompt = cfg.Context.BuildSystemPrompt(nil)
-	state.Model = getModelName(cfg.Provider)
+	state.Model = strings.TrimSpace(cfg.Model)
 	state.Provider = "provider"
 	state.SessionKey = "main"
 	state.Tools = ToAgentTools(cfg.Tools.ListExisting())
@@ -456,12 +458,6 @@ func (a *Agent) GetOrchestrator() *Orchestrator {
 }
 
 // Helper functions
-
-// getModelName extracts model name from provider
-func getModelName(p providers.Provider) string {
-	// This is a placeholder - actual implementation would depend on provider type
-	return "default"
-}
 
 // defaultConvertToLLM converts agent messages to provider messages
 func defaultConvertToLLM(messages []AgentMessage) ([]providers.Message, error) {

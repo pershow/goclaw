@@ -331,6 +331,7 @@ func (m *AgentManager) createAgent(cfg config.AgentConfig, contextBuilder *Conte
 		SessionMgr:   m.sessionMgr,
 		Tools:        m.tools,
 		Context:      contextBuilder,
+		Model:        model,
 		Workspace:    workspace,
 		MaxIteration: maxIterations,
 		Temperature:  temperature,

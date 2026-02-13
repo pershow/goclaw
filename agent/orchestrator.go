@@ -222,8 +222,8 @@ func (o *Orchestrator) streamAssistantResponse(ctx context.Context, state *Agent
 
 	// 从配置组装 LLM 调用选项
 	chatOpts := []providers.ChatOption{}
-	if o.config.Model != "" {
-		chatOpts = append(chatOpts, providers.WithModel(o.config.Model))
+	if model := strings.TrimSpace(o.config.Model); model != "" && !strings.EqualFold(model, "default") {
+		chatOpts = append(chatOpts, providers.WithModel(model))
 	}
 	if o.config.Temperature > 0 {
 		chatOpts = append(chatOpts, providers.WithTemperature(o.config.Temperature))
