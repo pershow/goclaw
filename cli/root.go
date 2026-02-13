@@ -210,6 +210,14 @@ func runStart(cmd *cobra.Command, args []string) {
 		logger.Warn("Failed to register use_skill tool", zap.Error(err))
 	}
 
+	if feishuDocsTool := tools.NewFeishuDocsToolFromConfig(cfg.Channels.Feishu); feishuDocsTool != nil {
+		for _, tool := range feishuDocsTool.GetTools() {
+			if err := toolRegistry.RegisterExisting(tool); err != nil {
+				logger.Warn("Failed to register tool", zap.String("tool", tool.Name()))
+			}
+		}
+	}
+
 	// 注册 Shell 工具
 	shellTool := tools.NewShellTool(
 		cfg.Tools.Shell.Enabled,

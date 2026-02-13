@@ -46,6 +46,7 @@ func NewTUIAgent(
 	maxTokens int,
 	maxIterations int,
 	skillsLoader *agent.SkillsLoader,
+	feishuCfg config.FeishuChannelConfig,
 ) (*TUIAgent, error) {
 	toolRegistry := agent.NewToolRegistry()
 
@@ -57,6 +58,12 @@ func NewTUIAgent(
 
 	// Register use_skill tool
 	_ = toolRegistry.RegisterExisting(tools.NewUseSkillTool())
+
+	if feishuDocsTool := tools.NewFeishuDocsToolFromConfig(feishuCfg); feishuDocsTool != nil {
+		for _, tool := range feishuDocsTool.GetTools() {
+			_ = toolRegistry.RegisterExisting(tool)
+		}
+	}
 
 	// Register shell tool
 	shellTool := tools.NewShellTool(
@@ -236,6 +243,7 @@ func runTUI(cmd *cobra.Command, args []string) {
 		cfg.Agents.Defaults.MaxTokens,
 		maxIterations,
 		skillsLoader,
+		cfg.Channels.Feishu,
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create TUI agent: %v\n", err)

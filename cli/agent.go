@@ -173,6 +173,13 @@ func runAgent(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to register use_skill: %v\n", err)
 	}
 
+	if feishuDocsTool := tools.NewFeishuDocsToolFromConfig(cfg.Channels.Feishu); feishuDocsTool != nil {
+		for _, tool := range feishuDocsTool.GetTools() {
+			if err := toolRegistry.RegisterExisting(tool); err != nil && agentVerbose {
+				fmt.Fprintf(os.Stderr, "Warning: Failed to register tool %s: %v\n", tool.Name(), err)
+			}
+		}
+	}
 	// Create skills loader
 	skillsLoader := agent.NewSkillsLoader(workspace, []string{})
 	if err := skillsLoader.Discover(); err != nil && agentVerbose {
