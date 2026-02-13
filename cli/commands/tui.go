@@ -3,13 +3,14 @@ package commands
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/chzyer/readline"
+	"github.com/ergochat/readline"
 	"github.com/smallnest/goclaw/agent"
 	"github.com/smallnest/goclaw/agent/tools"
 	"github.com/smallnest/goclaw/bus"
@@ -306,9 +307,10 @@ func runTUI(cmd *cobra.Command, args []string) {
 	// Input loop with persistent readline
 	fmt.Println("Enter your message (or /help for commands):")
 	for {
-		line, err := rl.Readline()
+		line, err := rl.ReadLine()
 		if err != nil {
-			if err == readline.ErrInterrupt {
+			// ergochat/readline returns io.EOF for Ctrl+C
+			if err == readline.ErrInterrupt || err == io.EOF {
 				fmt.Println("\nGoodbye!")
 				break
 			}
@@ -318,7 +320,7 @@ func runTUI(cmd *cobra.Command, args []string) {
 
 		// Save non-empty input to history
 		if line != "" {
-			_ = rl.SaveHistory(line)
+			_ = rl.SaveToHistory(line)
 		}
 
 		if line == "" {

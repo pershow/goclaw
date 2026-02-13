@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chzyer/readline"
+	"github.com/ergochat/readline"
 	"github.com/manifoldco/promptui"
 	"github.com/smallnest/goclaw/session"
 )
