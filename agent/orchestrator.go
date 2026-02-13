@@ -22,10 +22,11 @@ type Orchestrator struct {
 
 // NewOrchestrator creates a new agent orchestrator
 func NewOrchestrator(config *LoopConfig, initialState *AgentState) *Orchestrator {
+	// 事件通道缓冲需足够大，避免流式输出时消费者稍慢导致 orchestrator 阻塞
 	return &Orchestrator{
 		config:    config,
 		state:     initialState,
-		eventChan: make(chan *Event, 100),
+		eventChan: make(chan *Event, 512),
 	}
 }
 
@@ -75,6 +76,12 @@ func (o *Orchestrator) runLoop(ctx context.Context, state *AgentState) ([]AgentM
 	// Check for steering messages at start
 	pendingMessages := o.fetchSteeringMessages()
 
+	maxIter := o.config.MaxIterations
+	if maxIter <= 0 {
+		maxIter = 15
+	}
+	iteration := 0
+
 	// Outer loop: continues when queued follow-up messages arrive
 	for {
 		hasMoreToolCalls := true
@@ -82,6 +89,16 @@ func (o *Orchestrator) runLoop(ctx context.Context, state *AgentState) ([]AgentM
 
 		// Inner loop: process tool calls and steering messages
 		for hasMoreToolCalls || len(pendingMessages) > 0 {
+			if ctx.Err() != nil {
+				return state.Messages, ctx.Err()
+			}
+			iteration++
+			if iteration > maxIter {
+				logger.Warn("Max iterations reached, stopping to prevent infinite loop",
+					zap.Int("max_iterations", maxIter))
+				return state.Messages, fmt.Errorf("max iterations (%d) reached, stopping to prevent infinite loop", maxIter)
+			}
+
 			if !firstTurn {
 				o.emit(NewEvent(EventTurnStart))
 			} else {
@@ -180,6 +197,9 @@ func (o *Orchestrator) runLoop(ctx context.Context, state *AgentState) ([]AgentM
 		}
 
 		// Agent would stop here. Check for follow-up messages.
+		if ctx.Err() != nil {
+			return state.Messages, ctx.Err()
+		}
 		followUpMessages := o.fetchFollowUpMessages()
 		if len(followUpMessages) > 0 {
 			pendingMessages = append(pendingMessages, followUpMessages...)
@@ -195,7 +215,7 @@ func (o *Orchestrator) runLoop(ctx context.Context, state *AgentState) ([]AgentM
 
 // streamAssistantResponse calls the LLM and streams the response
 func (o *Orchestrator) streamAssistantResponse(ctx context.Context, state *AgentState) (AgentMessage, error) {
-	logger.Info("=== streamAssistantResponse Start ===",
+	logger.Debug("streamAssistantResponse Start",
 		zap.Int("message_count", len(state.Messages)),
 		zap.Strings("loaded_skills", state.LoadedSkills))
 
@@ -222,7 +242,7 @@ func (o *Orchestrator) streamAssistantResponse(ctx context.Context, state *Agent
 	maxTurns := o.config.MaxHistoryTurns
 	if maxTurns > 0 {
 		messages = LimitHistoryTurns(messages, maxTurns)
-		logger.Info("Context: limited history turns", zap.Int("max_turns", maxTurns), zap.Int("messages_after", len(messages)))
+		logger.Debug("Context: limited history turns", zap.Int("max_turns", maxTurns), zap.Int("messages_after", len(messages)))
 	}
 	messages = CopyMessagesWithTruncatedToolResults(messages, contextWindow)
 	if limit := contextWindow - reserve; limit > 0 {
@@ -309,7 +329,7 @@ func (o *Orchestrator) streamAssistantResponse(ctx context.Context, state *Agent
 
 	if useStreaming {
 		// 使用流式 API
-		logger.Info("Using streaming API")
+		logger.Debug("Using streaming API")
 		var content strings.Builder
 		var toolCalls []providers.ToolCall
 
@@ -344,7 +364,7 @@ func (o *Orchestrator) streamAssistantResponse(ctx context.Context, state *Agent
 		}
 	} else {
 		// 使用非流式 API
-		logger.Info("Using non-streaming API")
+		logger.Debug("Using non-streaming API")
 		response, err = o.config.Provider.Chat(ctx, fullMessages, toolDefs, chatOpts...)
 		if err != nil {
 			logger.Error("LLM call failed", zap.Error(err))
@@ -363,7 +383,7 @@ func (o *Orchestrator) streamAssistantResponse(ctx context.Context, state *Agent
 	// Convert response to agent message
 	assistantMsg := convertFromProviderResponse(response)
 
-	logger.Info("=== streamAssistantResponse End ===",
+	logger.Debug("streamAssistantResponse End",
 		zap.Bool("has_tool_calls", len(response.ToolCalls) > 0),
 		zap.Int("tool_calls_count", len(response.ToolCalls)))
 
@@ -377,7 +397,7 @@ func (o *Orchestrator) executeToolCalls(ctx context.Context, toolCalls []ToolCal
 	logger.Info("=== Execute Tool Calls Start ===",
 		zap.Int("count", len(toolCalls)))
 	for _, tc := range toolCalls {
-		logger.Info("Tool call start",
+		logger.Debug("Tool call start",
 			zap.String("tool_id", tc.ID),
 			zap.String("tool_name", tc.Name),
 			zap.Any("arguments", tc.Arguments))
@@ -430,7 +450,7 @@ func (o *Orchestrator) executeToolCalls(ctx context.Context, toolCalls []ToolCal
 		} else {
 			// Extract content for logging
 			contentText := extractToolResultContent(result.Content)
-			logger.Info("Tool execution success",
+			logger.Debug("Tool execution success",
 				zap.String("tool_id", tc.ID),
 				zap.String("tool_name", tc.Name),
 				zap.Any("arguments", tc.Arguments),
@@ -492,10 +512,15 @@ func (o *Orchestrator) executeToolCalls(ctx context.Context, toolCalls []ToolCal
 	return results, nil
 }
 
-// emit sends an event to the event channel
+// emit sends an event to the event channel (non-blocking to avoid deadlock when consumer is slow)
 func (o *Orchestrator) emit(event *Event) {
-	if o.eventChan != nil {
-		o.eventChan <- event
+	if o.eventChan == nil {
+		return
+	}
+	select {
+	case o.eventChan <- event:
+	default:
+		logger.Debug("event channel full, dropping event", zap.String("type", string(event.Type)))
 	}
 }
 

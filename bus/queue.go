@@ -94,7 +94,7 @@ func (b *MessageBus) PublishOutbound(ctx context.Context, msg *OutboundMessage) 
 		msg.Timestamp = time.Now()
 	}
 
-	logger.Info("Publishing outbound message to bus",
+	logger.Debug("Publishing outbound message to bus",
 		zap.String("id", msg.ID),
 		zap.String("channel", msg.Channel),
 		zap.String("chat_id", msg.ChatID),
@@ -103,7 +103,7 @@ func (b *MessageBus) PublishOutbound(ctx context.Context, msg *OutboundMessage) 
 
 	select {
 	case b.outbound <- msg:
-		logger.Info("Outbound message published successfully",
+		logger.Debug("Outbound message published successfully",
 			zap.String("id", msg.ID),
 			zap.Int("outbound_queue_size", len(b.outbound)))
 		return nil
