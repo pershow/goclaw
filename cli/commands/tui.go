@@ -425,6 +425,12 @@ func processTUIDialogue(
 						})
 					}
 				}
+				if reasoning, ok := msg.Metadata["reasoning_content"].(string); ok && strings.TrimSpace(reasoning) != "" {
+					if sessMsg.Metadata == nil {
+						sessMsg.Metadata = make(map[string]interface{})
+					}
+					sessMsg.Metadata["reasoning_content"] = reasoning
+				}
 			}
 
 			// Handle tool result messages
@@ -920,6 +926,15 @@ func sessionMessagesToAgentMessages(history []session.Message) []agent.AgentMess
 				agentMsg.Metadata = make(map[string]any)
 			}
 			agentMsg.Metadata["tool_call_id"] = sessMsg.ToolCallID
+			if toolName, ok := sessMsg.Metadata["tool_name"].(string); ok {
+				agentMsg.Metadata["tool_name"] = toolName
+			}
+		}
+		if reasoning, ok := sessMsg.Metadata["reasoning_content"].(string); ok && strings.TrimSpace(reasoning) != "" {
+			if agentMsg.Metadata == nil {
+				agentMsg.Metadata = make(map[string]any)
+			}
+			agentMsg.Metadata["reasoning_content"] = reasoning
 		}
 
 		result = append(result, agentMsg)
