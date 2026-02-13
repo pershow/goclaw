@@ -47,7 +47,7 @@ if ($LASTEXITCODE -eq 0) {
 
 # Start gateway with Control UI
 Write-Host "Starting gateway with Control UI..."
-Start-Process -FilePath ".\goclaw.exe" -ArgumentList "gateway", "run", "--port", "28789" -WindowStyle Hidden
+Start-Process -FilePath ".\goclaw.exe" -ArgumentList "gateway", "run",  -WindowStyle Hidden
 Start-Sleep 3
 
 # Check if started
