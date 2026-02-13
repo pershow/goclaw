@@ -321,6 +321,9 @@ func (m *AgentManager) createAgent(cfg config.AgentConfig, contextBuilder *Conte
 		maxIterations = 15
 	}
 
+	temperature := globalCfg.Agents.Defaults.Temperature
+	maxTokens := globalCfg.Agents.Defaults.MaxTokens
+
 	// 创建 Agent
 	agent, err := NewAgent(&NewAgentConfig{
 		Bus:          m.bus,
@@ -330,6 +333,8 @@ func (m *AgentManager) createAgent(cfg config.AgentConfig, contextBuilder *Conte
 		Context:      contextBuilder,
 		Workspace:    workspace,
 		MaxIteration: maxIterations,
+		Temperature:  temperature,
+		MaxTokens:    maxTokens,
 		SkillsLoader: m.skillsLoader,
 	})
 	if err != nil {

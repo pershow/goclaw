@@ -220,7 +220,19 @@ func (o *Orchestrator) streamAssistantResponse(ctx context.Context, state *Agent
 		zap.Int("tools_count", len(toolDefs)),
 		zap.Bool("has_loaded_skills", len(state.LoadedSkills) > 0))
 
-	response, err := o.config.Provider.Chat(ctx, fullMessages, toolDefs)
+	// 从配置组装 LLM 调用选项
+	chatOpts := []providers.ChatOption{}
+	if o.config.Model != "" {
+		chatOpts = append(chatOpts, providers.WithModel(o.config.Model))
+	}
+	if o.config.Temperature > 0 {
+		chatOpts = append(chatOpts, providers.WithTemperature(o.config.Temperature))
+	}
+	if o.config.MaxTokens > 0 {
+		chatOpts = append(chatOpts, providers.WithMaxTokens(o.config.MaxTokens))
+	}
+
+	response, err := o.config.Provider.Chat(ctx, fullMessages, toolDefs, chatOpts...)
 	if err != nil {
 		logger.Error("LLM call failed", zap.Error(err))
 		return AgentMessage{}, fmt.Errorf("LLM call failed: %w", err)

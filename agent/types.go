@@ -152,6 +152,10 @@ type LoopConfig struct {
 	MaxIterations int
 	SessionID     string
 
+	// LLM 调用参数（0 表示使用 provider 默认）
+	Temperature float64
+	MaxTokens   int
+
 	// Hooks for message transformation
 	ConvertToLLM     func([]AgentMessage) ([]providers.Message, error)
 	TransformContext func([]AgentMessage) ([]AgentMessage, error)

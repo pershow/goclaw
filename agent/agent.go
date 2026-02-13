@@ -40,6 +40,8 @@ type NewAgentConfig struct {
 	Context      *ContextBuilder
 	Workspace    string
 	MaxIteration int
+	Temperature  float64 // 0 表示使用 provider 默认
+	MaxTokens    int     // 0 表示使用 provider 默认
 	SkillsLoader *SkillsLoader
 }
 
@@ -78,6 +80,8 @@ func NewAgent(cfg *NewAgentConfig) (*Agent, error) {
 		Provider:         cfg.Provider,
 		SessionMgr:       cfg.SessionMgr,
 		MaxIterations:    cfg.MaxIteration,
+		Temperature:      cfg.Temperature,
+		MaxTokens:        cfg.MaxTokens,
 		ConvertToLLM:     defaultConvertToLLM,
 		TransformContext: nil,
 		Skills:           skills,
