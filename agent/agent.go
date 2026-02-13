@@ -288,6 +288,12 @@ func (a *Agent) updateSession(sess *session.Session, messages []AgentMessage) {
 					})
 				}
 			}
+			if reasoning, ok := msg.Metadata["reasoning_content"].(string); ok && strings.TrimSpace(reasoning) != "" {
+				if sessMsg.Metadata == nil {
+					sessMsg.Metadata = make(map[string]interface{})
+				}
+				sessMsg.Metadata["reasoning_content"] = reasoning
+			}
 		}
 
 		// Handle tool results
@@ -472,6 +478,9 @@ func defaultConvertToLLM(messages []AgentMessage) ([]providers.Message, error) {
 		providerMsg := providers.Message{
 			Role: string(msg.Role),
 		}
+		if reasoning, ok := msg.Metadata["reasoning_content"].(string); ok {
+			providerMsg.ReasoningContent = reasoning
+		}
 
 		// Extract content
 		for _, block := range msg.Content {
@@ -487,6 +496,10 @@ func defaultConvertToLLM(messages []AgentMessage) ([]providers.Message, error) {
 					providerMsg.Images = append(providerMsg.Images, b.Data)
 				} else if b.URL != "" {
 					providerMsg.Images = append(providerMsg.Images, b.URL)
+				}
+			case ThinkingContent:
+				if strings.TrimSpace(providerMsg.ReasoningContent) == "" {
+					providerMsg.ReasoningContent = b.Thinking
 				}
 			}
 		}

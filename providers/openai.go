@@ -78,7 +78,9 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 		req.Tools = convertToolsToOpenAI(tools)
 	}
 
-	completion, err := p.client.Chat.Completions.New(ctx, req, p.extraBodyOptions()...)
+	reqOpts := append(p.extraBodyOptions(), assistantReasoningOptions(messages)...)
+
+	completion, err := p.client.Chat.Completions.New(ctx, req, reqOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate content: %w", err)
 	}
@@ -89,9 +91,10 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 
 	choice := completion.Choices[0]
 	response := &Response{
-		Content:      choice.Message.Content,
-		ToolCalls:    parseOpenAIToolCalls(choice.Message.ToolCalls),
-		FinishReason: choice.FinishReason,
+		Content:          choice.Message.Content,
+		ReasoningContent: extractReasoningContent(choice.Message),
+		ToolCalls:        parseOpenAIToolCalls(choice.Message.ToolCalls),
+		FinishReason:     choice.FinishReason,
 		Usage: Usage{
 			PromptTokens:     int(completion.Usage.PromptTokens),
 			CompletionTokens: int(completion.Usage.CompletionTokens),
@@ -266,6 +269,67 @@ func parseOpenAIToolCalls(toolCalls []openai.ChatCompletionMessageToolCall) []To
 	}
 
 	return result
+}
+
+func assistantReasoningOptions(messages []Message) []option.RequestOption {
+	if len(messages) == 0 {
+		return nil
+	}
+
+	opts := make([]option.RequestOption, 0)
+	for i, msg := range messages {
+		if msg.Role != "assistant" {
+			continue
+		}
+		reasoning := strings.TrimSpace(msg.ReasoningContent)
+		if reasoning == "" {
+			continue
+		}
+		opts = append(opts, option.WithJSONSet(fmt.Sprintf("messages.%d.reasoning_content", i), reasoning))
+	}
+	return opts
+}
+
+func extractReasoningContent(msg openai.ChatCompletionMessage) string {
+	raw := strings.TrimSpace(msg.RawJSON())
+	if raw == "" {
+		return ""
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return ""
+	}
+
+	value, ok := payload["reasoning_content"]
+	if !ok || value == nil {
+		return ""
+	}
+
+	switch v := value.(type) {
+	case string:
+		return v
+	case []interface{}:
+		parts := make([]string, 0, len(v))
+		for _, item := range v {
+			switch s := item.(type) {
+			case string:
+				if strings.TrimSpace(s) != "" {
+					parts = append(parts, s)
+				}
+			default:
+				if b, err := json.Marshal(item); err == nil {
+					parts = append(parts, string(b))
+				}
+			}
+		}
+		return strings.Join(parts, "\n")
+	default:
+		if b, err := json.Marshal(v); err == nil {
+			return string(b)
+		}
+		return ""
+	}
 }
 
 func copyExtraBody(src map[string]interface{}) map[string]interface{} {

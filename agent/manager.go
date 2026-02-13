@@ -481,9 +481,11 @@ func (m *AgentManager) handleInboundMessage(ctx context.Context, msg *bus.Inboun
 		zap.Int("final_messages_count", len(finalMessages)),
 		zap.Error(err))
 	if err != nil {
-		// Check if error is related to tool_call_id mismatch (old session format)
+		// Check if error is related to historical message incompatibility (old session format)
 		errStr := err.Error()
-		if strings.Contains(errStr, "tool_call_id") && strings.Contains(errStr, "mismatch") {
+		hasToolCallIDMismatch := strings.Contains(errStr, "tool_call_id") && strings.Contains(errStr, "mismatch")
+		hasMissingReasoning := strings.Contains(errStr, "reasoning_content") && strings.Contains(errStr, "assistant tool call")
+		if hasToolCallIDMismatch || hasMissingReasoning {
 			logger.Warn("Detected old session format, clearing session",
 				zap.String("session_key", sessionKey),
 				zap.Error(err))
@@ -559,6 +561,12 @@ func (m *AgentManager) updateSession(sess *session.Session, messages []AgentMess
 					})
 				}
 			}
+			if reasoning, ok := msg.Metadata["reasoning_content"].(string); ok && strings.TrimSpace(reasoning) != "" {
+				if sessMsg.Metadata == nil {
+					sessMsg.Metadata = make(map[string]interface{})
+				}
+				sessMsg.Metadata["reasoning_content"] = reasoning
+			}
 		}
 
 		if msg.Role == RoleToolResult {
@@ -631,6 +639,12 @@ func sessionMessagesToAgentMessages(sessMsgs []session.Message) []AgentMessage {
 				}
 				agentMsg.Metadata["tool_call_id"] = sessMsg.ToolCallID
 			}
+		}
+		if reasoning, ok := sessMsg.Metadata["reasoning_content"].(string); ok && strings.TrimSpace(reasoning) != "" {
+			if agentMsg.Metadata == nil {
+				agentMsg.Metadata = make(map[string]any)
+			}
+			agentMsg.Metadata["reasoning_content"] = reasoning
 		}
 
 		result = append(result, agentMsg)

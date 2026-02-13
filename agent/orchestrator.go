@@ -441,6 +441,9 @@ func convertToProviderMessages(messages []AgentMessage) []providers.Message {
 		providerMsg := providers.Message{
 			Role: string(msg.Role),
 		}
+		if reasoning, ok := msg.Metadata["reasoning_content"].(string); ok {
+			providerMsg.ReasoningContent = reasoning
+		}
 
 		// Extract content
 		for _, block := range msg.Content {
@@ -456,6 +459,10 @@ func convertToProviderMessages(messages []AgentMessage) []providers.Message {
 					providerMsg.Images = append(providerMsg.Images, b.Data)
 				} else if b.URL != "" {
 					providerMsg.Images = append(providerMsg.Images, b.URL)
+				}
+			case ThinkingContent:
+				if strings.TrimSpace(providerMsg.ReasoningContent) == "" {
+					providerMsg.ReasoningContent = b.Thinking
 				}
 			}
 		}
@@ -504,11 +511,16 @@ func convertFromProviderResponse(response *providers.Response) AgentMessage {
 		})
 	}
 
+	metadata := map[string]any{"stop_reason": response.FinishReason}
+	if strings.TrimSpace(response.ReasoningContent) != "" {
+		metadata["reasoning_content"] = response.ReasoningContent
+	}
+
 	return AgentMessage{
 		Role:      RoleAssistant,
 		Content:   content,
 		Timestamp: time.Now().UnixMilli(),
-		Metadata:  map[string]any{"stop_reason": response.FinishReason},
+		Metadata:  metadata,
 	}
 }
 
