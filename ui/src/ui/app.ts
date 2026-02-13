@@ -243,6 +243,7 @@ export class GoClawApp extends LitElement {
           loading: false,
           sessionId: hello.sessionId || null,
         };
+        this.requestUpdate();
         this.loadInitialData();
       },
       onEvent: (evt) => {

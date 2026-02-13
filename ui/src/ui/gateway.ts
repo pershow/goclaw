@@ -113,6 +113,7 @@ export class GatewayBrowserClient {
   private handleMessage(data: string) {
     try {
       const msg = JSON.parse(data);
+      console.log("Received message:", msg);
 
       // Handle different message types
       if (msg.jsonrpc === "2.0") {
