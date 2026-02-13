@@ -24,7 +24,15 @@ import (
 const (
 	feishuEventModeWebhook        = "webhook"
 	feishuEventModeLongConnection = "long_connection"
+	feishuTypingEmoji             = "Typing"
+	feishuTypingTTL               = 10 * time.Minute
 )
+
+type feishuTypingReaction struct {
+	messageID  string
+	reactionID string
+	createdAt  time.Time
+}
 
 // FeishuChannel 飞书通道
 type FeishuChannel struct {
@@ -42,6 +50,7 @@ type FeishuChannel struct {
 	webhookServer *http.Server
 	wsClient      *larkws.Client
 	wsCancel      context.CancelFunc
+	pendingTyping map[string][]feishuTypingReaction // chatID -> queued typing reactions
 }
 
 // NewFeishuChannel 创建飞书通道
@@ -74,6 +83,7 @@ func NewFeishuChannel(cfg config.FeishuChannelConfig, bus *bus.MessageBus) (*Fei
 		webhookPort:       port,
 		eventMode:         eventMode,
 		client:            lark.NewClient(cfg.AppID, cfg.AppSecret),
+		pendingTyping:     make(map[string][]feishuTypingReaction),
 	}
 	channel.dispatcher = larkdispatcher.NewEventDispatcher(channel.verificationToken, channel.encryptKey).
 		OnP2MessageReceiveV1(channel.handleMessageReceiveEvent)
@@ -162,6 +172,9 @@ func (c *FeishuChannel) handleMessageReceiveEvent(ctx context.Context, event *la
 	if event == nil || event.Event == nil || event.Event.Message == nil || event.Event.Sender == nil {
 		return nil
 	}
+	if !isFeishuUserSender(event.Event.Sender) {
+		return nil
+	}
 
 	senderID := extractFeishuSenderID(event.Event.Sender.SenderId)
 	if senderID == "" {
@@ -173,15 +186,19 @@ func (c *FeishuChannel) handleMessageReceiveEvent(ctx context.Context, event *la
 	}
 
 	message := event.Event.Message
+	messageID := derefString(message.MessageId)
+	chatID := derefString(message.ChatId)
+	c.addTypingIndicator(messageID, chatID)
+
 	msgType := derefString(message.MessageType)
 	contentText := parseFeishuMessageContent(derefString(message.Content), msgType)
 
 	msg := &bus.InboundMessage{
-		ID:        derefString(message.MessageId),
+		ID:        messageID,
 		Content:   contentText,
 		AccountID: c.AccountID(),
 		SenderID:  senderID,
-		ChatID:    derefString(message.ChatId),
+		ChatID:    chatID,
 		Channel:   c.Name(),
 		Timestamp: time.Now(),
 		Metadata: map[string]interface{}{
@@ -195,6 +212,14 @@ func (c *FeishuChannel) handleMessageReceiveEvent(ctx context.Context, event *la
 	}
 
 	return nil
+}
+
+func isFeishuUserSender(sender *larkim.EventSender) bool {
+	if sender == nil {
+		return false
+	}
+	senderType := strings.ToLower(strings.TrimSpace(derefString(sender.SenderType)))
+	return senderType == "" || senderType == "user"
 }
 
 func extractFeishuSenderID(userID *larkim.UserId) string {
@@ -251,6 +276,8 @@ func derefString(v *string) string {
 
 // Send 发送消息
 func (c *FeishuChannel) Send(msg *bus.OutboundMessage) error {
+	c.clearTypingIndicator(msg.ChatID)
+
 	contentMap := map[string]string{"text": msg.Content}
 	contentBytes, err := json.Marshal(contentMap)
 	if err != nil {
@@ -276,6 +303,100 @@ func (c *FeishuChannel) Send(msg *bus.OutboundMessage) error {
 	}
 
 	return nil
+}
+
+func (c *FeishuChannel) addTypingIndicator(messageID, chatID string) {
+	if messageID == "" || chatID == "" {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	req := larkim.NewCreateMessageReactionReqBuilder().
+		MessageId(messageID).
+		Body(larkim.NewCreateMessageReactionReqBodyBuilder().
+			ReactionType(larkim.NewEmojiBuilder().EmojiType(feishuTypingEmoji).Build()).
+			Build()).
+		Build()
+
+	resp, err := c.client.Im.MessageReaction.Create(ctx, req)
+	if err != nil {
+		logger.Debug("Failed to add Feishu typing reaction", zap.Error(err))
+		return
+	}
+	if !resp.Success() {
+		logger.Debug("Failed to add Feishu typing reaction",
+			zap.Int("code", resp.Code),
+			zap.String("msg", resp.Msg))
+		return
+	}
+
+	reactionID := ""
+	if resp.Data != nil {
+		reactionID = derefString(resp.Data.ReactionId)
+	}
+	if reactionID == "" {
+		return
+	}
+
+	c.mu.Lock()
+	queue := c.pendingTyping[chatID]
+	now := time.Now()
+	filtered := make([]feishuTypingReaction, 0, len(queue)+1)
+	for _, item := range queue {
+		if now.Sub(item.createdAt) <= feishuTypingTTL {
+			filtered = append(filtered, item)
+		}
+	}
+	filtered = append(filtered, feishuTypingReaction{
+		messageID:  messageID,
+		reactionID: reactionID,
+		createdAt:  now,
+	})
+	c.pendingTyping[chatID] = filtered
+	c.mu.Unlock()
+}
+
+func (c *FeishuChannel) clearTypingIndicator(chatID string) {
+	if chatID == "" {
+		return
+	}
+
+	c.mu.Lock()
+	queue := c.pendingTyping[chatID]
+	if len(queue) == 0 {
+		c.mu.Unlock()
+		return
+	}
+
+	state := queue[0]
+	remaining := queue[1:]
+	if len(remaining) == 0 {
+		delete(c.pendingTyping, chatID)
+	} else {
+		c.pendingTyping[chatID] = remaining
+	}
+	c.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	req := larkim.NewDeleteMessageReactionReqBuilder().
+		MessageId(state.messageID).
+		ReactionId(state.reactionID).
+		Build()
+
+	resp, err := c.client.Im.MessageReaction.Delete(ctx, req)
+	if err != nil {
+		logger.Debug("Failed to remove Feishu typing reaction", zap.Error(err))
+		return
+	}
+	if !resp.Success() {
+		logger.Debug("Failed to remove Feishu typing reaction",
+			zap.Int("code", resp.Code),
+			zap.String("msg", resp.Msg))
+	}
 }
 
 // Stop 停止飞书通道
