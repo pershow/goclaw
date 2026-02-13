@@ -312,10 +312,14 @@ func (m *Manager) SetupFromConfig(cfg *config.Config) error {
 			for accountID, accountCfg := range cfg.Channels.Feishu.Accounts {
 				if accountCfg.Enabled && accountCfg.AppID != "" {
 					fsCfg := config.FeishuChannelConfig{
-						Enabled:    accountCfg.Enabled,
-						AppID:      accountCfg.AppID,
-						AppSecret:  accountCfg.AppSecret,
-						AllowedIDs: accountCfg.AllowedIDs,
+						Enabled:           accountCfg.Enabled,
+						AppID:             accountCfg.AppID,
+						AppSecret:         accountCfg.AppSecret,
+						EncryptKey:        accountCfg.EncryptKey,
+						VerificationToken: accountCfg.VerificationToken,
+						EventMode:         accountCfg.EventMode,
+						WebhookPort:       accountCfg.WebhookPort,
+						AllowedIDs:        accountCfg.AllowedIDs,
 					}
 					channel, err := NewFeishuChannel(fsCfg, m.bus)
 					if err != nil {

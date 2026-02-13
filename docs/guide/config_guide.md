@@ -246,6 +246,7 @@ When a profile fails:
       "enabled": true,
       "app_id": "cli_xxxxxxxxx",
       "app_secret": "your-app-secret",
+      "event_mode": "webhook",
       "encrypt_key": "your-encrypt-key",
       "verification_token": "your-verification-token",
       "webhook_port": 8081,
@@ -254,6 +255,10 @@ When a profile fails:
   }
 }
 ```
+
+`event_mode` 支持：
+- `webhook`：HTTP 回调模式（需要 `verification_token`）
+- `long_connection`：飞书长连接模式（WebSocket，`verification_token` 可不填）
 
 ### QQ (Official Bot API)
 

@@ -117,6 +117,7 @@ type ChannelAccountConfig struct {
 	AESKey            string   `mapstructure:"aes_key" json:"aes_key"`                       // Infoflow AES key
 	EncryptKey        string   `mapstructure:"encrypt_key" json:"encrypt_key"`               // Feishu encrypt key
 	VerificationToken string   `mapstructure:"verification_token" json:"verification_token"` // Feishu verification token
+	EventMode         string   `mapstructure:"event_mode" json:"event_mode"`                 // Feishu event mode: webhook/long_connection
 	WebhookPort       int      `mapstructure:"webhook_port" json:"webhook_port"`             // Infoflow/Feishu webhook port
 	AllowedIDs        []string `mapstructure:"allowed_ids" json:"allowed_ids"`
 }
@@ -152,6 +153,7 @@ type FeishuChannelConfig struct {
 	AppSecret         string   `mapstructure:"app_secret" json:"app_secret"`
 	EncryptKey        string   `mapstructure:"encrypt_key" json:"encrypt_key"`
 	VerificationToken string   `mapstructure:"verification_token" json:"verification_token"`
+	EventMode         string   `mapstructure:"event_mode" json:"event_mode"` // webhook / long_connection
 	WebhookPort       int      `mapstructure:"webhook_port" json:"webhook_port"`
 	AllowedIDs        []string `mapstructure:"allowed_ids" json:"allowed_ids"`
 	// 多账号配置（新格式）

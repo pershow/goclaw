@@ -67,6 +67,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("agents.defaults.max_iterations", 15)
 	v.SetDefault("agents.defaults.temperature", 0.7)
 	v.SetDefault("agents.defaults.max_tokens", 4096)
+	v.SetDefault("channels.feishu.event_mode", "webhook")
 
 	// Gateway 默认配置
 	v.SetDefault("gateway.host", "localhost")
@@ -249,8 +250,16 @@ func validateChannels(cfg *Config) error {
 		if cfg.Channels.Feishu.AppSecret == "" {
 			return fmt.Errorf("feishu app_secret is required when enabled")
 		}
-		if cfg.Channels.Feishu.VerificationToken == "" {
-			return fmt.Errorf("feishu verification_token is required when enabled")
+		mode, err := normalizeFeishuEventMode(cfg.Channels.Feishu.EventMode)
+		if err != nil {
+			return err
+		}
+		cfg.Channels.Feishu.EventMode = mode
+		if mode == "webhook" && cfg.Channels.Feishu.VerificationToken == "" {
+			return fmt.Errorf("feishu verification_token is required when event_mode=webhook")
+		}
+		if cfg.Channels.Feishu.WebhookPort < 0 || cfg.Channels.Feishu.WebhookPort > 65535 {
+			return fmt.Errorf("feishu webhook_port must be between 0 and 65535")
 		}
 	}
 
@@ -359,4 +368,15 @@ func validateAPIKey(key string) error {
 	}
 
 	return nil
+}
+
+func normalizeFeishuEventMode(mode string) (string, error) {
+	mode = strings.TrimSpace(strings.ToLower(mode))
+	if mode == "" || mode == "webhook" {
+		return "webhook", nil
+	}
+	if mode == "long_connection" {
+		return mode, nil
+	}
+	return "", fmt.Errorf("feishu event_mode must be one of: webhook, long_connection")
 }

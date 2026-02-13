@@ -28,7 +28,10 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
-require github.com/tidwall/sjson v1.2.5 // indirect
+require (
+	github.com/gogo/protobuf v1.3.2 // indirect
+	github.com/tidwall/sjson v1.2.5 // indirect
+)
 
 require (
 	github.com/chzyer/readline v1.5.1 // indirect
