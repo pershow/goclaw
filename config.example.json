@@ -148,7 +148,10 @@
       "api_key": "YOUR_MOONSHOT_KIMI_API_KEY",
       "base_url": "https://api.moonshot.cn/v1",
       "timeout": 600,
-      "streaming": true
+      "streaming": true,
+      "extra_body": {
+        "thinking": { "type": "disabled" }
+      }
     }
   },
   "gateway": {

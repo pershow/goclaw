@@ -105,7 +105,12 @@
         "api_key": "YOUR_MOONSHOT_KIMI_API_KEY",
         "base_url": "https://api.moonshot.cn/v1",
         "priority": 2,
-        "streaming": true
+        "streaming": true,
+      "extra_body": {
+        "reasoning": {
+          "enabled": false
+        }
+      }
       },
       {
         "name": "ollama-local",
@@ -148,7 +153,10 @@
       "api_key": "YOUR_MOONSHOT_KIMI_API_KEY",
       "base_url": "https://api.moonshot.cn/v1",
       "timeout": 600,
-      "streaming": true
+      "streaming": true,
+      "extra_body": {
+        "thinking": { "type": "disabled" }
+      }
     }
   },
   "gateway": {

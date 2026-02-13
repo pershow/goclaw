@@ -288,10 +288,11 @@ type AnthropicProviderConfig struct {
 
 // MoonshotProviderConfig 月之暗面 Kimi 配置（OpenAI 兼容 API）
 type MoonshotProviderConfig struct {
-	APIKey    string `mapstructure:"api_key" json:"api_key"`
-	BaseURL   string `mapstructure:"base_url" json:"base_url"`
-	Timeout   int    `mapstructure:"timeout" json:"timeout"`
-	Streaming *bool  `mapstructure:"streaming" json:"streaming"` // 是否启用流式输出，默认 true
+	APIKey    string                 `mapstructure:"api_key" json:"api_key"`
+	BaseURL   string                 `mapstructure:"base_url" json:"base_url"`
+	Timeout   int                    `mapstructure:"timeout" json:"timeout"`
+	Streaming *bool                  `mapstructure:"streaming" json:"streaming"` // 是否启用流式输出，默认 true
+	ExtraBody map[string]interface{} `mapstructure:"extra_body" json:"extra_body"` // 请求体扩展，如关闭 thinking: {"thinking":{"type":"disabled"}}
 }
 
 // GatewayConfig 网关配置

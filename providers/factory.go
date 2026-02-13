@@ -73,7 +73,7 @@ func NewSimpleProvider(cfg *config.Config) (Provider, error) {
 			baseURL,
 			model,
 			cfg.Agents.Defaults.MaxTokens,
-			nil,
+			cfg.Providers.Moonshot.ExtraBody,
 			streaming,
 		)
 	default:
