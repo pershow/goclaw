@@ -11,6 +11,12 @@ import (
 )
 
 var globalConfig *Config
+var lastConfigFile string // 上次 Load 实际使用的配置文件路径，供排查用
+
+// ConfigFileUsed 返回上次 Load 时实际使用的配置文件路径（可能为空，如仅用默认值或环境变量）
+func ConfigFileUsed() string {
+	return lastConfigFile
+}
 
 // Load 加载配置文件
 func Load(configPath string) (*Config, error) {
@@ -34,7 +40,7 @@ func Load(configPath string) (*Config, error) {
 		v.SetConfigType("json")
 	}
 
-	// 设置环境变量前缀
+	// 设置环境变量前缀（如 GOSKILLS_AGENTS_DEFAULTS_MODEL 会覆盖 agents.defaults.model）
 	v.SetEnvPrefix("GOSKILLS")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
@@ -49,6 +55,7 @@ func Load(configPath string) (*Config, error) {
 		}
 		// 配置文件不存在，使用默认值和环境变量
 	}
+	lastConfigFile = v.ConfigFileUsed()
 
 	// 解析配置
 	var cfg Config

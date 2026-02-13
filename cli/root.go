@@ -151,6 +151,11 @@ func runStart(cmd *cobra.Command, args []string) {
 	defer func() { _ = logger.Sync() }()
 
 	logger.Info("Starting goclaw agent", zap.String("log_file", logPath))
+	configFile := config.ConfigFileUsed()
+	if configFile == "" {
+		configFile = "(defaults/env only)"
+	}
+	logger.Info("config loaded", zap.String("config_file", configFile), zap.String("agents.defaults.model", cfg.Agents.Defaults.Model))
 
 	// 验证配置
 	if err := config.Validate(cfg); err != nil {

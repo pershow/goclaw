@@ -80,6 +80,15 @@ func runAgent(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 		os.Exit(1)
 	}
+	if agentVerbose {
+		used := config.ConfigFileUsed()
+		if used == "" {
+			used = "(defaults/env only)"
+		}
+		logger.Info("config loaded",
+			zap.String("config_file", used),
+			zap.String("agents.defaults.model", cfg.Agents.Defaults.Model))
+	}
 
 	// Create workspace
 	workspace := os.Getenv("HOME") + "/.goclaw/workspace"

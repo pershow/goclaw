@@ -278,7 +278,12 @@ func (o *Orchestrator) streamAssistantResponse(ctx context.Context, state *Agent
 	}
 	fullMessages = append(fullMessages, providerMsgs...)
 
+	modelForRequest := strings.TrimSpace(o.config.Model)
+	if modelForRequest == "" || strings.EqualFold(modelForRequest, "default") {
+		modelForRequest = "(provider default)"
+	}
 	logger.Info("=== Calling LLM ===",
+		zap.String("model", modelForRequest),
 		zap.Int("messages_count", len(fullMessages)),
 		zap.Int("tools_count", len(toolDefs)),
 		zap.Bool("has_loaded_skills", len(state.LoadedSkills) > 0))

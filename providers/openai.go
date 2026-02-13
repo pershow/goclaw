@@ -17,6 +17,7 @@ import (
 type OpenAIProvider struct {
 	client           openai.Client
 	model            string
+	baseURL          string
 	maxTokens        int
 	extraBody        map[string]interface{}
 	streamingEnabled bool // 是否启用流式输出
@@ -47,6 +48,7 @@ func NewOpenAIProviderWithStreaming(apiKey, baseURL, model string, maxTokens int
 	return &OpenAIProvider{
 		client:           openai.NewClient(clientOpts...),
 		model:            model,
+		baseURL:          baseURL,
 		maxTokens:        maxTokens,
 		extraBody:        copyExtraBody(extraBody),
 		streamingEnabled: streaming,
@@ -392,7 +394,10 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 		Model:    shared.ChatModel(opts.Model),
 		Messages: openAIMessages,
 	}
-	if opts.Temperature > 0 {
+	// Moonshot/Kimi kimi-k2 系列只接受 temperature=0.6，否则 400
+	if strings.Contains(p.baseURL, "moonshot") {
+		req.Temperature = openai.Float(0.6)
+	} else if opts.Temperature > 0 {
 		req.Temperature = openai.Float(opts.Temperature)
 	}
 	if opts.MaxTokens > 0 {

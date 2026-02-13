@@ -162,6 +162,11 @@ func runGateway(cmd *cobra.Command, args []string) {
 		logger.Warn("Failed to load config, using defaults", zap.Error(err))
 		cfg = &config.Config{}
 	}
+	configFile := config.ConfigFileUsed()
+	if configFile == "" {
+		configFile = "(defaults/env only)"
+	}
+	logger.Info("config loaded", zap.String("config_file", configFile), zap.String("agents.defaults.model", cfg.Agents.Defaults.Model))
 
 	// Override config with flags
 	if gatewayPort != 0 {

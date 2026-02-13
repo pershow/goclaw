@@ -5,7 +5,9 @@ import (
 	"strings"
 
 	"github.com/smallnest/goclaw/config"
+	"github.com/smallnest/goclaw/internal/logger"
 	"github.com/smallnest/goclaw/types"
+	"go.uber.org/zap"
 )
 
 // ProviderType 提供商类型
@@ -36,6 +38,9 @@ func NewSimpleProvider(cfg *config.Config) (Provider, error) {
 	if err != nil {
 		return nil, err
 	}
+	logger.Info("LLM provider resolved",
+		zap.String("provider", string(providerType)),
+		zap.String("model", model))
 
 	switch providerType {
 	case ProviderTypeOpenAI:

@@ -1,51 +1,60 @@
 {
   "workspace": {
-    "path": ""
+    "path": "C:\\Users\\Administrator\\.goclaw\\workspace"
   },
   "agents": {
     "defaults": {
-      "model": "YOUR_DEFAULT_MODEL_HERE",
+      "model": "kimi-k2.5",
       "max_iterations": 15,
       "temperature": 1,
       "max_tokens": 8192,
       "context_tokens": 0,
-      "limit_history_turns": 0
-    }
-  },
-  "session": {
-    "scope": "per-sender",
-    "store": "",
-    "reset": {
-      "mode": "daily",
-      "at_hour": 4,
-      "idle_minutes": 60
-    }
+      "limit_history_turns": 0,
+      "subagents": {
+        "max_concurrent": 8,
+        "archive_after_minutes": 60,
+        "model": "kimi-k2.5",
+        "timeout_seconds": 300
+      }
+    },
+    "list": null
   },
   "channels": {
     "telegram": {
       "enabled": false,
       "token": "",
-      "allowed_ids": []
+      "allowed_ids": [],
+      "accounts": null
     },
     "whatsapp": {
       "enabled": false,
       "bridge_url": "",
-      "allowed_ids": []
+      "allowed_ids": [],
+      "accounts": null
     },
     "feishu": {
-      "enabled": false,
-      "app_id": "",
-      "app_secret": "",
+      "enabled": true,
+      "app_id": "cli_a90615c106e1dbb5",
+      "app_secret": "jb9R7Qnplmrap8dEgg1vzeWMJ7VAwlwq",
       "encrypt_key": "",
-      "verification_token": "",
+      "verification_token": "pershow",
       "event_mode": "long_connection",
-      "webhook_port": 8765
+      "webhook_port": 8765,
+      "allowed_ids": []
+    },
+    "dingtalk": {
+      "enabled": false,
+      "client_id": "",
+      "secret": "",
+      "allowed_ids": [],
+      "accounts": null
     },
     "qq": {
       "enabled": false,
       "app_id": "",
       "app_secret": "",
-      "allowed_ids": []
+      "allowed_ids": [],
+      "accounts": null
     },
     "wework": {
       "enabled": false,
@@ -53,13 +62,10 @@
       "agent_id": "",
       "secret": "",
       "token": "",
-      "encoding_aes_key": ""
-    },
-    "dingtalk": {
-      "enabled": false,
-      "client_id": "",
-      "secret": "",
-      "allowed_ids": []
+      "encoding_aes_key": "",
+      "webhook_port": 0,
+      "allowed_ids": null,
+      "accounts": null
     },
     "infoflow": {
       "enabled": false,
@@ -72,9 +78,19 @@
         "bot1": {
           "enabled": false,
           "name": "Infoflow Bot 1",
-          "webhook_url": "",
           "token": "",
+          "app_id": "",
+          "app_secret": "",
+          "corp_id": "",
+          "agent_id": "",
+          "client_id": "",
+          "client_secret": "",
+          "bridge_url": "",
+          "webhook_url": "",
           "aes_key": "",
+          "encrypt_key": "",
+          "verification_token": "",
+          "event_mode": "",
           "webhook_port": 18766,
           "allowed_ids": []
         }
@@ -82,67 +98,17 @@
     }
   },
   "providers": {
-    "profiles": [
-      {
-        "name": "openai-primary",
-        "provider": "openai",
-        "api_key": "YOUR_OPENAI_API_KEY",
-        "base_url": "https://api.openai.com/v1",
-        "priority": 1,
-        "streaming": true
-      },
-      {
-        "name": "deepseek",
-        "provider": "openai",
-        "api_key": "YOUR_DEEPSEEK_API_KEY",
-        "base_url": "https://api.deepseek.com",
-        "priority": 2,
-        "streaming": true
-      },
-      {
-        "name": "kimi",
-        "provider": "moonshot",
-        "api_key": "YOUR_MOONSHOT_KIMI_API_KEY",
-        "base_url": "https://api.moonshot.cn/v1",
-        "priority": 2,
-        "streaming": true,
-      "extra_body": {
-        "reasoning": {
-          "enabled": false
-        }
-      }
-      },
-      {
-        "name": "ollama-local",
-        "provider": "openai",
-        "api_key": "ollama",
-        "base_url": "http://localhost:11434/v1",
-        "priority": 3,
-        "streaming": false
-      }
-    ],
-    "failover": {
-      "enabled": false,
-      "strategy": "round_robin",
-      "default_cooldown": "5m"
-    },
     "openrouter": {
       "api_key": "",
       "base_url": "",
       "timeout": 600,
-      "max_retries": 3,
-      "streaming": true,
-      "extra_body": {
-        "reasoning": {
-          "enabled": false
-        }
-      }
+      "max_retries": 3
     },
     "openai": {
       "api_key": "YOUR_OPENAI_API_KEY_HERE",
       "base_url": "https://api.deepseek.com",
       "timeout": 600,
-      "extra_body": {}
+      "extra_body": null
     },
     "anthropic": {
       "api_key": "",
@@ -150,12 +116,27 @@
       "timeout": 600
     },
     "moonshot": {
-      "api_key": "YOUR_MOONSHOT_KIMI_API_KEY",
+      "api_key": "YOUR_OPENAI_API_KEY_HERE",
       "base_url": "https://api.moonshot.cn/v1",
-      "timeout": 600,
       "streaming": true,
       "extra_body": {
-        "thinking": { "type": "disabled" }
+        "thinking": {
+          "type": "disabled"
+        },
+        "reasoning": {
+          "enabled": false
+        }
+      },
+      "timeout": 600
+    },
+    "profiles": null,
+    "failover": {
+      "enabled": false,
+      "strategy": "",
+      "default_cooldown": 0,
+      "circuit_breaker": {
+        "failure_threshold": 0,
+        "timeout": 0
       }
     }
   },
@@ -170,11 +151,22 @@
       "path": "/ws",
       "enable_auth": false,
       "auth_token": "",
-      "ping_interval": "30s",
-      "pong_timeout": "60s",
-      "read_timeout": "60s",
-      "write_timeout": "10s"
+      "ping_interval": 30000000000,
+      "pong_timeout": 60000000000,
+      "read_timeout": 60000000000,
+      "write_timeout": 10000000000
     }
+  },
+  "session": {
+    "scope": "per-sender",
+    "store": "",
+    "main_key": "",
+    "reset": {
+      "mode": "daily",
+      "at_hour": 4,
+      "idle_minutes": 60
+    },
+    "reset_by_channel": null
   },
   "tools": {
     "filesystem": {
@@ -190,7 +182,15 @@
         "mkfs"
       ],
       "timeout": 30,
-      "working_dir": ""
+      "working_dir": "",
+      "sandbox": {
+        "enabled": false,
+        "image": "goclaw/sandbox:latest",
+        "workdir": "/workspace",
+        "remove": true,
+        "network": "none",
+        "privileged": false
+      }
     },
     "web": {
       "search_api_key": "",
@@ -203,12 +203,17 @@
       "timeout": 30
     }
   },
+  "approvals": {
+    "behavior": "",
+    "allowlist": null
+  },
   "memory": {
     "backend": "builtin",
     "builtin": {
       "enabled": true,
       "database_path": "",
       "auto_index": true,
+      "embedding": null,
       "sync": {
         "watch": true,
         "watch_debounce_ms": 1500
@@ -236,11 +241,11 @@
         "retention_days": 30
       },
       "update": {
-        "interval": "5m",
+        "interval": 300000000000,
         "on_boot": true,
-        "embed_interval": "60m",
-        "command_timeout": "30s",
-        "update_timeout": "120s"
+        "embed_interval": 3600000000000,
+        "command_timeout": 30000000000,
+        "update_timeout": 120000000000
       },
       "limits": {
         "max_results": 6,
@@ -248,5 +253,7 @@
         "timeout_ms": 4000
       }
     }
-  }
+  },
+  "skills": null,
+  "bindings": null
 }
