@@ -3,6 +3,7 @@ import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { SessionsListResult } from "../types.ts";
 import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
+import type { SubagentRunSnapshot } from "../app-tool-stream.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import {
   renderMessageGroup,
@@ -32,6 +33,8 @@ export type ChatProps = {
   compactionStatus?: CompactionIndicatorStatus | null;
   messages: unknown[];
   toolMessages: unknown[];
+  /** Real-time subagent run progress when viewing main session. */
+  subagentRunEntries?: SubagentRunSnapshot[];
   stream: string | null;
   streamStartedAt: number | null;
   assistantAvatarUrl?: string | null;
@@ -260,6 +263,38 @@ export function renderChat(props: ChatProps) {
           return nothing;
         },
       )}
+      ${
+        (props.subagentRunEntries?.length ?? 0) > 0
+          ? html`
+              <div class="chat-subagent-progress" role="status" aria-live="polite">
+                <div class="chat-subagent-progress__title">子任务进度</div>
+                ${repeat(
+                  props.subagentRunEntries!,
+                  (run) => run.runId,
+                  (run) => html`
+                    <div class="chat-subagent-progress__run">
+                      <div class="chat-subagent-progress__run-id">${run.runId.slice(0, 8)}…</div>
+                      <ul class="chat-subagent-progress__tools">
+                        ${run.entries.map(
+                          (e) => html`
+                            <li class="chat-subagent-progress__tool">
+                              <span class="chat-subagent-progress__tool-name">${e.name}</span>
+                              ${e.output != null && e.output !== ""
+                                ? html`
+                                    <pre class="chat-subagent-progress__tool-output">${e.output}</pre>
+                                  `
+                                : html` <span class="muted">运行中…</span> `}
+                            </li>
+                          `,
+                        )}
+                      </ul>
+                    </div>
+                  `,
+                )}
+              </div>
+            `
+          : nothing
+      }
     </div>
   `;
 

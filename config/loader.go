@@ -6,12 +6,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/spf13/viper"
 )
 
 var globalConfig *Config
+var globalConfigMu sync.RWMutex
 var lastConfigFile string // 上次 Load 实际使用的配置文件路径，供排查用
+var configWatcher *Watcher
+var configHistory *ConfigHistory
 
 // ConfigFileUsed 返回上次 Load 时实际使用的配置文件路径（可能为空，如仅用默认值或环境变量）
 func ConfigFileUsed() string {
@@ -27,14 +31,13 @@ func Load(configPath string) (*Config, error) {
 	if configPath != "" {
 		v.SetConfigFile(configPath)
 	} else {
-		// 默认配置文件路径
+		// 默认配置文件路径：与 internal.GetConfigPath() 一致，使用 ~/.goclaw/config.json
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get home directory: %w", err)
 		}
-
-		configDir := filepath.Join(home, ".goclaw")
-		v.AddConfigPath(configDir)
+		goclawDir := filepath.Join(home, ".goclaw")
+		v.AddConfigPath(goclawDir)
 		v.AddConfigPath(".")
 		v.SetConfigName("config")
 		v.SetConfigType("json")
@@ -63,7 +66,10 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
+	globalConfigMu.Lock()
 	globalConfig = &cfg
+	globalConfigMu.Unlock()
+
 	return &cfg, nil
 }
 
@@ -72,7 +78,7 @@ func setDefaults(v *viper.Viper) {
 	// Agent 默认配置
 	v.SetDefault("agents.defaults.model", "openrouter:anthropic/claude-opus-4-5")
 	v.SetDefault("agents.defaults.max_iterations", 15)
-	v.SetDefault("agents.defaults.temperature", 1)
+	// 不设置 temperature 默认值：配置里没写则不传该参数（由 API 默认）
 	v.SetDefault("agents.defaults.max_tokens", 8192)
 	v.SetDefault("agents.defaults.context_tokens", 0)
 	v.SetDefault("agents.defaults.limit_history_turns", 0)
@@ -86,7 +92,7 @@ func setDefaults(v *viper.Viper) {
 
 	// Gateway 默认配置
 	v.SetDefault("gateway.host", "localhost")
-	v.SetDefault("gateway.port", 8080)
+	v.SetDefault("gateway.port", 28789)
 	v.SetDefault("gateway.read_timeout", 30)
 	v.SetDefault("gateway.write_timeout", 30)
 
@@ -130,10 +136,152 @@ func Save(cfg *Config, path string) error {
 
 // Get 获取全局配置
 func Get() *Config {
+	globalConfigMu.RLock()
+	defer globalConfigMu.RUnlock()
 	return globalConfig
 }
 
-// GetDefaultConfigPath 获取默认配置文件路径
+// Set 设置全局配置（用于热重载）
+func Set(cfg *Config) {
+	globalConfigMu.Lock()
+	defer globalConfigMu.Unlock()
+	globalConfig = cfg
+}
+
+// EnableHotReload 启用配置热重载
+func EnableHotReload(configPath string) error {
+	if configWatcher != nil {
+		return fmt.Errorf("hot reload already enabled")
+	}
+
+	watcher, err := NewWatcher(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to create config watcher: %w", err)
+	}
+
+	configWatcher = watcher
+	configWatcher.Start()
+
+	// 初始化配置历史记录
+	home, err := os.UserHomeDir()
+	if err == nil {
+		historyFile := filepath.Join(home, ".goclaw", "config_history.json")
+		history, err := NewConfigHistory(historyFile, 100)
+		if err == nil {
+			configHistory = history
+		}
+	}
+
+	return nil
+}
+
+// DisableHotReload 禁用配置热重载
+func DisableHotReload() error {
+	if configWatcher == nil {
+		return nil
+	}
+
+	if err := configWatcher.Stop(); err != nil {
+		return fmt.Errorf("failed to stop config watcher: %w", err)
+	}
+
+	configWatcher = nil
+	return nil
+}
+
+// OnConfigChange 注册配置变更处理函数
+func OnConfigChange(handler ChangeHandler) error {
+	if configWatcher == nil {
+		return fmt.Errorf("hot reload not enabled")
+	}
+
+	configWatcher.OnChange(handler)
+	return nil
+}
+
+// GetHistory 获取配置变更历史
+func GetHistory(limit int) []ConfigChange {
+	if configHistory == nil {
+		return []ConfigChange{}
+	}
+	return configHistory.GetHistory(limit)
+}
+
+// GetLatestChange 获取最新的配置变更
+func GetLatestChange() *ConfigChange {
+	if configHistory == nil {
+		return nil
+	}
+	return configHistory.GetLatest()
+}
+
+// ClearHistory 清空配置历史
+func ClearHistory() error {
+	if configHistory == nil {
+		return fmt.Errorf("config history not initialized")
+	}
+	return configHistory.Clear()
+}
+
+// RollbackConfig 回滚到指定索引的配置
+func RollbackConfig(index int) error {
+	if configHistory == nil {
+		return fmt.Errorf("config history not initialized")
+	}
+
+	oldCfg, err := configHistory.Rollback(index)
+	if err != nil {
+		return err
+	}
+
+	// 验证配置
+	if err := Validate(oldCfg); err != nil {
+		return fmt.Errorf("rollback config is invalid: %w", err)
+	}
+
+	// 保存配置到文件
+	if lastConfigFile != "" {
+		if err := Save(oldCfg, lastConfigFile); err != nil {
+			return fmt.Errorf("failed to save rollback config: %w", err)
+		}
+	}
+
+	// 更新全局配置
+	Set(oldCfg)
+
+	return nil
+}
+
+// RollbackToLatest 回滚到最近一次成功的配置
+func RollbackToLatest() error {
+	if configHistory == nil {
+		return fmt.Errorf("config history not initialized")
+	}
+
+	oldCfg, err := configHistory.RollbackToLatest()
+	if err != nil {
+		return err
+	}
+
+	// 验证配置
+	if err := Validate(oldCfg); err != nil {
+		return fmt.Errorf("rollback config is invalid: %w", err)
+	}
+
+	// 保存配置到文件
+	if lastConfigFile != "" {
+		if err := Save(oldCfg, lastConfigFile); err != nil {
+			return fmt.Errorf("failed to save rollback config: %w", err)
+		}
+	}
+
+	// 更新全局配置
+	Set(oldCfg)
+
+	return nil
+}
+
+// GetDefaultConfigPath 获取默认配置文件路径（与 internal.GetConfigPath 一致）
 func GetDefaultConfigPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -148,7 +296,7 @@ func GetWorkspacePath(cfg *Config) (string, error) {
 		// 使用配置中的自定义路径
 		return cfg.Workspace.Path, nil
 	}
-	// 使用默认路径
+	// 使用默认路径：~/.goclaw/workspace
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get home directory: %w", err)

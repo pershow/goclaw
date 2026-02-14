@@ -134,11 +134,11 @@ export function renderApp(state: AppViewState) {
           </button>
           <div class="brand">
             <div class="brand-logo">
-              <img src=${basePath ? `${basePath}/favicon.svg` : "/favicon.svg"} alt="OpenClaw" />
+              <img src=${basePath ? `${basePath}/favicon.svg` : "/favicon.svg"} alt="GoClaw" />
             </div>
             <div class="brand-text">
-              <div class="brand-title">OPENCLAW</div>
-              <div class="brand-sub">Gateway Dashboard</div>
+              <div class="brand-title">GoClaw</div>
+              <div class="brand-sub">Control UI</div>
             </div>
           </div>
         </div>
@@ -185,13 +185,23 @@ export function renderApp(state: AppViewState) {
           <div class="nav-group__items">
             <a
               class="nav-item nav-item--external"
-              href="https://docs.openclaw.ai"
+              href="https://github.com/pershow/goclaw#readme"
               target="_blank"
               rel="noreferrer"
-              title="Docs (opens in new tab)"
+              title="GoClaw README (opens in new tab)"
             >
               <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
               <span class="nav-item__text">Docs</span>
+            </a>
+            <a
+              class="nav-item nav-item--external"
+              href="https://github.com/pershow/goclaw"
+              target="_blank"
+              rel="noreferrer"
+              title="Repository (opens in new tab)"
+            >
+              <span class="nav-item__icon" aria-hidden="true">${icons.link}</span>
+              <span class="nav-item__text">GitHub</span>
             </a>
           </div>
         </div>
@@ -1083,6 +1093,7 @@ export function renderApp(state: AppViewState) {
                 assistantAvatarUrl: chatAvatarUrl,
                 messages: state.chatMessages,
                 toolMessages: state.chatToolMessages,
+                subagentRunEntries: state.subagentRunEntries,
                 stream: state.chatStream,
                 streamStartedAt: state.chatStreamStartedAt,
                 draft: state.chatMessage,

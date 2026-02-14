@@ -19,12 +19,14 @@ const defaultEmbeddingCacheMaxEntries = 10000
 
 // SQLiteStore implements the Store interface using SQLite
 type SQLiteStore struct {
-	db          *sql.DB
-	dbPath      string
-	provider    EmbeddingProvider
-	mu          sync.RWMutex
-	initialized bool
-	storeConfig StoreConfig // 用于原子重建时创建临时库
+	db           *sql.DB
+	dbPath       string
+	provider     EmbeddingProvider
+	mu           sync.RWMutex
+	initialized  bool
+	storeConfig  StoreConfig // 用于原子重建时创建临时库
+	deduplicator *SearchResultDeduplicator
+	reindexer    *AtomicReindexer
 }
 
 // StoreConfig configures the SQLite memory store
@@ -72,14 +74,18 @@ func NewSQLiteStore(config StoreConfig) (*SQLiteStore, error) {
 	}
 
 	// Set connection pool settings
-	db.SetMaxOpenConns(1) // SQLite works best with single connection
-	db.SetMaxIdleConns(1)
+	// 增加连接数以提升并发性能（与 OpenClaw 对齐）
+	// SQLite 在 WAL 模式下支持多个读连接
+	db.SetMaxOpenConns(5) // 允许多个并发读操作
+	db.SetMaxIdleConns(2)
+	db.SetConnMaxLifetime(time.Hour)
 
 	store := &SQLiteStore{
-		db:          db,
-		dbPath:      config.DBPath,
-		provider:    config.Provider,
-		storeConfig: config,
+		db:           db,
+		dbPath:       config.DBPath,
+		provider:     config.Provider,
+		storeConfig:  config,
+		deduplicator: NewSearchResultDeduplicator(0.85), // 85% 相似度阈值
 	}
 
 	// Initialize schema
@@ -87,6 +93,9 @@ func NewSQLiteStore(config StoreConfig) (*SQLiteStore, error) {
 		db.Close()
 		return nil, fmt.Errorf("failed to initialize schema: %w", err)
 	}
+
+	// Initialize reindexer
+	store.reindexer = NewAtomicReindexer(store)
 
 	store.initialized = true
 	return store, nil
@@ -1139,8 +1148,9 @@ func (s *SQLiteStore) RebuildAtomic(populate func(Store) error) error {
 	if err != nil {
 		return fmt.Errorf("reopen store: %w", err)
 	}
-	s.db.SetMaxOpenConns(1)
-	s.db.SetMaxIdleConns(1)
+	s.db.SetMaxOpenConns(5)
+	s.db.SetMaxIdleConns(2)
+	s.db.SetConnMaxLifetime(time.Hour)
 	return nil
 }
 
@@ -1167,4 +1177,77 @@ func joinString(strs []string, sep string) string {
 		result += sep + strs[i]
 	}
 	return result
+}
+
+// GetDeduplicator 获取搜索结果去重器
+func (s *SQLiteStore) GetDeduplicator() *SearchResultDeduplicator {
+	return s.deduplicator
+}
+
+// SetDeduplicator 设置搜索结果去重器
+func (s *SQLiteStore) SetDeduplicator(deduplicator *SearchResultDeduplicator) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deduplicator = deduplicator
+}
+
+// GetReindexer 获取原子重索引器
+func (s *SQLiteStore) GetReindexer() *AtomicReindexer {
+	return s.reindexer
+}
+
+// Reindex 执行原子重索引
+func (s *SQLiteStore) Reindex() error {
+	if s.reindexer == nil {
+		return fmt.Errorf("reindexer not initialized")
+	}
+	return s.reindexer.Reindex()
+}
+
+// ReindexAsync 异步执行原子重索引
+func (s *SQLiteStore) ReindexAsync() error {
+	if s.reindexer == nil {
+		return fmt.Errorf("reindexer not initialized")
+	}
+	return s.reindexer.ReindexAsync()
+}
+
+// GetReindexStatus 获取重索引状态
+func (s *SQLiteStore) GetReindexStatus() map[string]interface{} {
+	if s.reindexer == nil {
+		return map[string]interface{}{
+			"error": "reindexer not initialized",
+		}
+	}
+	return s.reindexer.GetStatus()
+}
+
+// SearchWithDeduplication 搜索并去重（支持文本查询）
+func (s *SQLiteStore) SearchWithDeduplication(query string, limit int) ([]SearchResult, error) {
+	// 使用文本查询（FTS）
+	opts := DefaultSearchOptions()
+	opts.Limit = limit * 2 // 获取更多结果以便去重
+
+	results, err := s.SearchByTextQuery(query, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	// 转换为 []SearchResult
+	searchResults := make([]SearchResult, len(results))
+	for i, r := range results {
+		searchResults[i] = *r
+	}
+
+	// 去重
+	if s.deduplicator != nil {
+		searchResults = s.deduplicator.Deduplicate(searchResults)
+	}
+
+	// 限制结果数量
+	if len(searchResults) > limit {
+		searchResults = searchResults[:limit]
+	}
+
+	return searchResults, nil
 }

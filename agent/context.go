@@ -343,6 +343,7 @@ func (b *ContextBuilder) buildWorkspace() string {
 
 Your working directory is: %s
 Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.
+When the user asks about the project, code, or files, look in this workspace first: use list_files (path ".") or memory_search to find relevant content.
 
 GoClaw paths (use when asked about config, sessions, or memory):
 - Config file: %s

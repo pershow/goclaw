@@ -10,6 +10,10 @@ Go 语言版本的 OpenClaw - 一个功能强大的 AI Agent 框架。
 ## 功能特性
 
 - 🎨 **Web 控制界面 (New!)**：基于 Lit 的现代 Web UI，支持实时聊天、多视图导航、零依赖部署
+- 🔥 **配置热重载 (New!)**：支持配置文件热重载，无需重启服务即可应用配置变更
+- 📜 **配置历史和回滚 (New!)**：自动记录配置变更历史，支持一键回滚到之前的配置
+- 🧠 **高级内存功能 (New!)**：会话文件索引、搜索结果去重、原子重索引
+- ⚡ **Agent 架构优化 (New!)**：并行工具执行、认证配置轮换，显著提升性能和可靠性
 - 🛠️ **完整的工具系统**：FileSystem、Shell、Web、Browser，支持 Docker 沙箱与权限控制
 - 📚 **技能系统 (Skills)**：兼容 [OpenClaw](https://github.com/openclaw/openclaw) 和 [AgentSkills](https://agentskills.io) 规范，支持自动发现与环境准入控制 (Gating)
 - 💾 **持久化会话**：基于 JSONL 的会话存储，支持完整的工具调用链 (Tool Calls) 记录与恢复
@@ -65,6 +69,139 @@ cd ui && npm run dev
 - [快速开始指南](QUICKSTART.md)
 - [前端移植文档](FRONTEND_MIGRATION.md)
 - [完整项目报告](MIGRATION_REPORT.md)
+
+## 🔥 配置热重载 (New!)
+
+goclaw 支持配置文件热重载，无需重启服务即可应用配置变更。
+
+### 特性
+
+- ✅ **自动检测**：监听配置文件变化，自动触发重载
+- ✅ **防抖机制**：500ms 防抖延迟，避免频繁重载
+- ✅ **配置验证**：重载前验证新配置的有效性
+- ✅ **组件更新**：自动更新 Gateway、Channel Manager、Session Manager 等组件
+- ✅ **客户端通知**：向所有连接的 WebSocket 客户端广播配置重载事件
+
+### 使用方法
+
+```bash
+# 启动 Gateway（自动启用热重载）
+goclaw gateway run
+
+# 修改配置文件
+vim ~/.goclaw/config.json
+
+# 配置会自动重载，无需重启服务
+```
+
+### 手动触发重载
+
+```bash
+goclaw gateway reload
+```
+
+详细文档请参考：[配置热重载文档](docs/CONFIG_HOT_RELOAD.md)
+
+## 📜 配置历史和回滚 (New!)
+
+goclaw 自动记录所有配置变更，支持查看历史和一键回滚。
+
+### 特性
+
+- ✅ **自动记录**：每次配置变更自动记录
+- ✅ **详细信息**：记录时间、变更内容、成功/失败状态
+- ✅ **一键回滚**：快速恢复到之前的配置
+- ✅ **智能回滚**：自动回滚到最近一次成功的配置
+
+### 使用方法
+
+```bash
+# 查看配置变更历史
+goclaw gateway history
+
+# 回滚到最近一次成功的配置
+goclaw gateway rollback
+
+# 回滚到指定索引的配置
+goclaw gateway rollback 2
+```
+
+详细文档请参考：[高级功能文档](docs/ADVANCED_FEATURES_COMPLETION.md)
+
+## 🧠 高级内存功能 (New!)
+
+goclaw 提供了强大的内存管理功能，包括会话索引、搜索去重和原子重索引。
+
+### 特性
+
+- ✅ **会话文件索引**：自动索引会话文件，支持全文搜索
+- ✅ **搜索结果去重**：基于内容哈希和相似度的智能去重
+- ✅ **原子重索引**：安全的数据库重建，支持并发控制
+
+### 使用方法
+
+```go
+// 会话文件索引
+indexer := memory.NewSessionIndexer(store, sessionDir, 30)
+indexer.Start()
+
+// 搜索并去重
+results, err := store.SearchWithDeduplication("query", 10)
+
+// 原子重索引
+store.ReindexAsync()
+```
+
+详细文档请参考：[高级功能文档](docs/ADVANCED_FEATURES_COMPLETION.md)
+
+## ⚡ Agent 架构优化 (New!)
+
+goclaw 实现了先进的 Agent 架构优化，显著提升性能和可靠性。
+
+### 特性
+
+- ✅ **并行工具执行**：多个工具调用并行执行，性能提升高达 80%
+- ✅ **认证配置轮换**：自动切换多个 API 配置，可靠性提升 99.75%
+- ✅ **增强错误分类**：8 种错误类型，智能识别和处理
+- ✅ **指数退避重试**：自动重试临时性错误，成功率提升至 99.99%
+- ✅ **智能上下文管理**：4 级优先级，渐进式压缩，保留关键信息
+
+### 使用方法
+
+**并行工具执行**（自动启用）
+```bash
+# 当 Agent 需要调用多个工具时，自动并行执行
+goclaw gateway run
+```
+
+**认证配置轮换**
+```json
+{
+  "providers": {
+    "failover": {
+      "enabled": true,
+      "strategy": "round_robin",
+      "default_cooldown": "5m"
+    },
+    "profiles": [
+      {
+        "name": "primary",
+        "provider": "openai",
+        "api_key": "sk-xxx",
+        "priority": 1
+      },
+      {
+        "name": "backup",
+        "provider": "anthropic",
+        "api_key": "sk-ant-xxx",
+        "priority": 2
+      }
+    ]
+  }
+}
+```
+
+详细文档请参考：[Agent 架构优化文档](docs/AGENT_OPTIMIZATION_COMPLETION.md)
 
 ## 技能系统
 

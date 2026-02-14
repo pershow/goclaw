@@ -59,6 +59,69 @@
   background: transparent;
 }
 
+/* Subagent progress - real-time child run tool stream when viewing main session */
+.chat-subagent-progress {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  font-size: 13px;
+}
+
+.chat-subagent-progress__title {
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.chat-subagent-progress__run {
+  margin-bottom: 10px;
+}
+
+.chat-subagent-progress__run:last-child {
+  margin-bottom: 0;
+}
+
+.chat-subagent-progress__run-id {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.chat-subagent-progress__tools {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.chat-subagent-progress__tool {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-subagent-progress__tool:last-child {
+  border-bottom: none;
+}
+
+.chat-subagent-progress__tool-name {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.chat-subagent-progress__tool-output {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  background: var(--panel-strong);
+  border-radius: 4px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* Focus mode exit button */
 .chat-focus-exit {
   position: absolute;

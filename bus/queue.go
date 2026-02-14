@@ -12,25 +12,32 @@ import (
 
 // MessageBus 消息总线
 type MessageBus struct {
-	inbound       chan *InboundMessage
-	outbound      chan *OutboundMessage
-	outSubs       map[string]chan *OutboundMessage
-	outSubsMu     sync.RWMutex
-	mu            sync.RWMutex
-	closed        bool
-	fanoutStopped bool
+	inbound         chan *InboundMessage
+	outbound        chan *OutboundMessage
+	outSubs         map[string]chan *OutboundMessage
+	outSubsMu       sync.RWMutex
+	agentEvents     chan *AgentEventPayload
+	agentSubs       map[string]chan *AgentEventPayload
+	agentSubsMu     sync.RWMutex
+	mu              sync.RWMutex
+	closed          bool
+	fanoutStopped   bool
+	agentFanoutStop bool
 }
 
 // NewMessageBus 创建消息总线
 func NewMessageBus(bufferSize int) *MessageBus {
 	b := &MessageBus{
-		inbound:  make(chan *InboundMessage, bufferSize),
-		outbound: make(chan *OutboundMessage, bufferSize),
-		outSubs:  make(map[string]chan *OutboundMessage),
-		closed:   false,
+		inbound:     make(chan *InboundMessage, bufferSize),
+		outbound:    make(chan *OutboundMessage, bufferSize),
+		outSubs:     make(map[string]chan *OutboundMessage),
+		agentEvents: make(chan *AgentEventPayload, bufferSize*2),
+		agentSubs:   make(map[string]chan *AgentEventPayload),
+		closed:      false,
 	}
 	// 启动广播 goroutine
 	go b.fanoutMessages()
+	go b.fanoutAgentEvents()
 	return b
 }
 
@@ -143,6 +150,87 @@ func (b *MessageBus) ConsumeOutbound(ctx context.Context) (*OutboundMessage, err
 	}
 }
 
+// PublishAgentEvent 发布 Agent 事件（与 OpenClaw emitAgentEvent 对齐），供 Control UI 显示进度与工具执行
+func (b *MessageBus) PublishAgentEvent(ctx context.Context, payload *AgentEventPayload) error {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	if b.closed {
+		return ErrBusClosed
+	}
+	if payload.Ts == 0 {
+		payload.Ts = time.Now().UnixMilli()
+	}
+
+	select {
+	case b.agentEvents <- payload:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		// 非阻塞：若队列满则丢弃，避免阻塞 orchestrator
+		return nil
+	}
+}
+
+// AgentEventSubscription Agent 事件订阅
+type AgentEventSubscription struct {
+	ID      string
+	Channel <-chan *AgentEventPayload
+	bus     *MessageBus
+}
+
+// Unsubscribe 取消 Agent 事件订阅
+func (s *AgentEventSubscription) Unsubscribe() {
+	if s != nil && s.bus != nil {
+		s.bus.UnsubscribeAgentEvent(s.ID)
+	}
+}
+
+// SubscribeAgentEvent 订阅 Agent 事件（Gateway 用于向 WebSocket 广播）
+func (b *MessageBus) SubscribeAgentEvent() *AgentEventSubscription {
+	b.agentSubsMu.Lock()
+	defer b.agentSubsMu.Unlock()
+
+	subID := uuid.New().String()
+	ch := make(chan *AgentEventPayload, 100)
+	b.agentSubs[subID] = ch
+
+	return &AgentEventSubscription{
+		ID:      subID,
+		Channel: ch,
+		bus:     b,
+	}
+}
+
+// UnsubscribeAgentEvent 取消 Agent 事件订阅
+func (b *MessageBus) UnsubscribeAgentEvent(subID string) {
+	b.agentSubsMu.Lock()
+	defer b.agentSubsMu.Unlock()
+
+	if ch, ok := b.agentSubs[subID]; ok {
+		delete(b.agentSubs, subID)
+		close(ch)
+	}
+}
+
+// fanoutAgentEvents 将 agent 事件分发给所有订阅者
+func (b *MessageBus) fanoutAgentEvents() {
+	for payload := range b.agentEvents {
+		b.agentSubsMu.RLock()
+		for _, ch := range b.agentSubs {
+			select {
+			case ch <- payload:
+			default:
+			}
+		}
+		b.agentSubsMu.RUnlock()
+	}
+	b.mu.Lock()
+	b.agentFanoutStop = true
+	b.mu.Unlock()
+}
+
 // Close 关闭消息总线
 func (b *MessageBus) Close() error {
 	b.mu.Lock()
@@ -159,14 +247,23 @@ func (b *MessageBus) Close() error {
 	for _, ch := range b.outSubs {
 		close(ch)
 	}
-	// 清空 map
 	for k := range b.outSubs {
 		delete(b.outSubs, k)
 	}
 	b.outSubsMu.Unlock()
 
+	b.agentSubsMu.Lock()
+	for _, ch := range b.agentSubs {
+		close(ch)
+	}
+	for k := range b.agentSubs {
+		delete(b.agentSubs, k)
+	}
+	b.agentSubsMu.Unlock()
+
 	close(b.inbound)
 	close(b.outbound)
+	close(b.agentEvents)
 
 	return nil
 }

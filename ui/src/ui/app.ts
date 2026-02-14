@@ -75,6 +75,7 @@ import {
   resetToolStream as resetToolStreamInternal,
   type ToolStreamEntry,
   type CompactionStatus,
+  type SubagentRunSnapshot,
 } from "./app-tool-stream.ts";
 import { resolveInjectedAssistantIdentity } from "./assistant-identity.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
@@ -131,6 +132,13 @@ export class OpenClawApp extends LitElement {
   @state() accessor chatStream: string | null = null;
   @state() accessor chatStreamStartedAt: number | null = null;
   @state() accessor chatRunId: string | null = null;
+  /** Subagent runs (when viewing main session) for real-time progress. */
+  private subagentRuns = new Map<
+    string,
+    { sessionKey: string; toolStreamById: Map<string, ToolStreamEntry>; toolStreamOrder: string[] }
+  >();
+  @state() accessor subagentRunEntries: SubagentRunSnapshot[] = [];
+  private subagentFlushTimer: number | null = null;
   @state() accessor compactionStatus: CompactionStatus | null = null;
   @state() accessor chatAvatarUrl: string | null = null;
   @state() accessor chatThinkingLevel: string | null = null;
@@ -389,7 +397,44 @@ export class OpenClawApp extends LitElement {
   }
 
   resetToolStream() {
+    if (this.subagentFlushTimer != null) {
+      clearTimeout(this.subagentFlushTimer);
+      this.subagentFlushTimer = null;
+    }
     resetToolStreamInternal(this as unknown as Parameters<typeof resetToolStreamInternal>[0]);
+  }
+
+  /** Throttled flush: schedule UI update after last subagent event to avoid jank. */
+  scheduleSubagentFlush(): void {
+    if (this.subagentFlushTimer != null) {
+      clearTimeout(this.subagentFlushTimer);
+    }
+    this.subagentFlushTimer = window.setTimeout(() => {
+      this.subagentFlushTimer = null;
+      this.flushSubagentRunEntries();
+    }, 120);
+  }
+
+  /** Build reactive subagentRunEntries from subagentRuns for UI. Called by app-tool-stream after subagent events. */
+  flushSubagentRunEntries(): void {
+    const entries: SubagentRunSnapshot[] = [];
+    for (const [runId, run] of this.subagentRuns.entries()) {
+      entries.push({
+        runId,
+        sessionKey: run.sessionKey,
+        entries: run.toolStreamOrder
+          .map((id) => run.toolStreamById.get(id))
+          .filter((e): e is ToolStreamEntry => e != null)
+          .map((e) => ({
+            toolCallId: e.toolCallId,
+            name: e.name,
+            output: e.output,
+            startedAt: e.startedAt,
+            updatedAt: e.updatedAt,
+          })),
+      });
+    }
+    this.subagentRunEntries = entries;
   }
 
   resetChatScroll() {

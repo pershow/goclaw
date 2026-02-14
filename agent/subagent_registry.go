@@ -390,6 +390,50 @@ func (r *SubagentRegistry) BeginCleanup(runID string) bool {
 	return true
 }
 
+// RecoverAfterRestart 启动时恢复未收尾的子 agent 记录（与 OpenClaw restoreSubagentRunsOnce + resumeSubagentRun 对齐）。
+// 应在 LoadFromDisk 与 SetOnRunComplete 之后调用。
+// - 已结束但未宣告/未清理（异常退出前已完成 Run）：对每条调用 onRunComplete，做宣告并按 cleanup 删会话。
+// - 未结束（异常退出时子 agent 仍在跑）：视为中断，标记 outcome 为 error "interrupted by restart"，再调用 onRunComplete。
+func (r *SubagentRegistry) RecoverAfterRestart() {
+	r.mu.Lock()
+	toRecover := make([]*SubagentRunRecord, 0, len(r.runs))
+	runIDs := make([]string, 0, len(r.runs))
+	now := time.Now().UnixMilli()
+	for runID, record := range r.runs {
+		if record == nil {
+			continue
+		}
+		if record.EndedAt == nil {
+			// 未结束：进程退出时子任务仍在跑，视为中断
+			record.EndedAt = &now
+			record.Outcome = &SubagentRunOutcome{Status: "error", Error: "interrupted by restart"}
+			toRecover = append(toRecover, record)
+			runIDs = append(runIDs, runID)
+			continue
+		}
+		// 已结束但未完成清理（未执行过 announce/cleanup）
+		if !record.CleanupHandled {
+			toRecover = append(toRecover, record)
+			runIDs = append(runIDs, runID)
+		}
+	}
+	if len(toRecover) > 0 {
+		_ = r.saveToDisk()
+	}
+	r.mu.Unlock()
+
+	for i, record := range toRecover {
+		runID := runIDs[i]
+		if r.onRunComplete != nil {
+			go r.onRunComplete(runID, record)
+		}
+	}
+	if len(toRecover) > 0 {
+		logger.Info("Subagent registry recovered runs after restart",
+			zap.Int("count", len(toRecover)))
+	}
+}
+
 // Count 获取运行数量
 func (r *SubagentRegistry) Count() int {
 	r.mu.RLock()

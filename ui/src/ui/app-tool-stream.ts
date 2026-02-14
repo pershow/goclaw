@@ -25,6 +25,25 @@ export type ToolStreamEntry = {
   message: Record<string, unknown>;
 };
 
+/** Snapshot of one subagent run for UI: runId, sessionKey, and tool entries. */
+export type SubagentRunSnapshot = {
+  runId: string;
+  sessionKey: string;
+  entries: Array<{
+    toolCallId: string;
+    name: string;
+    output?: string;
+    startedAt: number;
+    updatedAt: number;
+  }>;
+};
+
+type SubagentRunState = {
+  sessionKey: string;
+  toolStreamById: Map<string, ToolStreamEntry>;
+  toolStreamOrder: string[];
+};
+
 type ToolStreamHost = {
   sessionKey: string;
   chatRunId: string | null;
@@ -32,6 +51,12 @@ type ToolStreamHost = {
   toolStreamOrder: string[];
   chatToolMessages: Record<string, unknown>[];
   toolStreamSyncTimer: number | null;
+  /** When viewing main session, store subagent runs keyed by runId. */
+  subagentRuns?: Map<string, SubagentRunState>;
+  /** Called after updating subagentRuns so host can flush to reactive state. */
+  flushSubagentRunEntries?: () => void;
+  /** Optional: throttle UI updates (e.g. 100ms). If set, called instead of flushSubagentRunEntries on each event. */
+  scheduleSubagentFlush?: () => void;
 };
 
 function extractToolOutputText(value: unknown): string | null {
@@ -159,6 +184,10 @@ export function resetToolStream(host: ToolStreamHost) {
   host.toolStreamOrder = [];
   host.chatToolMessages = [];
   flushToolStreamSync(host);
+  if (host.subagentRuns) {
+    host.subagentRuns.clear();
+    host.flushSubagentRunEntries?.();
+  }
 }
 
 export type CompactionStatus = {
@@ -219,6 +248,83 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
   const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
+  const isSubagentSession = sessionKey?.includes(":subagent:") ?? false;
+  const isMainSession = !host.sessionKey.includes(":subagent:");
+
+  // Subagent event while viewing main session: store in subagent runs for real-time progress.
+  if (
+    sessionKey &&
+    sessionKey !== host.sessionKey &&
+    isSubagentSession &&
+    isMainSession &&
+    host.subagentRuns != null &&
+    host.flushSubagentRunEntries
+  ) {
+    const data = payload.data ?? {};
+    const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : "";
+    if (!toolCallId) {
+      return;
+    }
+    let run = host.subagentRuns.get(payload.runId);
+    if (!run) {
+      run = {
+        sessionKey,
+        toolStreamById: new Map(),
+        toolStreamOrder: [],
+      };
+      host.subagentRuns.set(payload.runId, run);
+    }
+    const name = typeof data.name === "string" ? data.name : "tool";
+    const phase = typeof data.phase === "string" ? data.phase : "";
+    const args = phase === "start" ? data.args : undefined;
+    const output =
+      phase === "update"
+        ? formatToolOutput(data.partialResult)
+        : phase === "result"
+          ? formatToolOutput(data.result)
+          : undefined;
+    const now = Date.now();
+    let entry = run.toolStreamById.get(toolCallId);
+    if (!entry) {
+      entry = {
+        toolCallId,
+        runId: payload.runId,
+        sessionKey,
+        name,
+        args,
+        output: output || undefined,
+        startedAt: typeof payload.ts === "number" ? payload.ts : now,
+        updatedAt: now,
+        message: {},
+      };
+      run.toolStreamById.set(toolCallId, entry);
+      run.toolStreamOrder.push(toolCallId);
+    } else {
+      entry.name = name;
+      if (args !== undefined) {
+        entry.args = args;
+      }
+      if (output !== undefined) {
+        entry.output = output || undefined;
+      }
+      entry.updatedAt = now;
+    }
+    entry.message = buildToolStreamMessage(entry);
+    if (run.toolStreamOrder.length > TOOL_STREAM_LIMIT) {
+      const overflow = run.toolStreamOrder.length - TOOL_STREAM_LIMIT;
+      const removed = run.toolStreamOrder.splice(0, overflow);
+      for (const id of removed) {
+        run.toolStreamById.delete(id);
+      }
+    }
+    if (host.scheduleSubagentFlush) {
+      host.scheduleSubagentFlush();
+    } else {
+      host.flushSubagentRunEntries?.();
+    }
+    return;
+  }
+
   if (sessionKey && sessionKey !== host.sessionKey) {
     return;
   }

@@ -132,17 +132,39 @@ func GatewayCommand() *cobra.Command {
 	}
 	callCmd.Flags().StringVarP(&gatewayParams, "params", "p", "{}", "Parameters as JSON")
 
+	// Gateway reload command
+	reloadCmd := &cobra.Command{
+		Use:   "reload",
+		Short: "Reload gateway configuration",
+		Run:   runGatewayReload,
+	}
+
+	// Gateway config history command
+	historyCmd := &cobra.Command{
+		Use:   "history",
+		Short: "Show configuration change history",
+		Run:   runGatewayHistory,
+	}
+
+	// Gateway config rollback command
+	rollbackCmd := &cobra.Command{
+		Use:   "rollback [index]",
+		Short: "Rollback to a previous configuration",
+		Args:  cobra.MaximumNArgs(1),
+		Run:   runGatewayRollback,
+	}
+
 	cmd.AddCommand(runCmd, statusCmd, healthCmd, probeCmd)
 	cmd.AddCommand(installCmd, uninstallCmd, startCmd, stopCmd, restartCmd)
-	cmd.AddCommand(callCmd)
+	cmd.AddCommand(callCmd, reloadCmd, historyCmd, rollbackCmd)
 
 	return cmd
 }
 
 // runGateway runs the gateway server
 func runGateway(cmd *cobra.Command, args []string) {
-	// 日志同时输出到 stdout 与 ~/.goclaw/logs/goclaw.log
-	logPath := filepath.Join(internal.GetGoclawDir(), "logs", "goclaw.log")
+	// 日志同时输出到 stdout 与 ~/.goclaw/logs/goclaw-2006-01-02.log（按日期）
+	logPath := filepath.Join(internal.GetGoclawDir(), "logs", "goclaw-"+time.Now().Format("2006-01-02")+".log")
 	logLevel := "info"
 	if gatewayVerbose {
 		logLevel = "debug"
@@ -167,6 +189,15 @@ func runGateway(cmd *cobra.Command, args []string) {
 		configFile = "(defaults/env only)"
 	}
 	logger.Info("config loaded", zap.String("config_file", configFile), zap.String("agents.defaults.model", cfg.Agents.Defaults.Model))
+
+	// Enable hot reload if config file exists
+	if configFile != "" && configFile != "(defaults/env only)" {
+		if err := config.EnableHotReload(configFile); err != nil {
+			logger.Warn("Failed to enable config hot reload", zap.Error(err))
+		} else {
+			logger.Info("Config hot reload enabled", zap.String("watching", configFile))
+		}
+	}
 
 	// Override config with flags
 	if gatewayPort != 0 {
@@ -247,6 +278,44 @@ func runGateway(cmd *cobra.Command, args []string) {
 	// Start gateway
 	if err := gatewayServer.Start(ctx); err != nil {
 		logger.Fatal("Failed to start gateway", zap.Error(err))
+	}
+
+	// Register config change handlers
+	if configFile != "" && configFile != "(defaults/env only)" {
+		if err := config.OnConfigChange(func(oldCfg, newCfg *config.Config) error {
+			logger.Info("Configuration changed, reloading components...")
+
+			// Update gateway configuration
+			if err := gatewayServer.HandleConfigReload(oldCfg, newCfg); err != nil {
+				logger.Error("Failed to reload gateway config", zap.Error(err))
+				return err
+			}
+
+			// Update channel manager configuration
+			if err := channelMgr.SetupFromConfig(newCfg); err != nil {
+				logger.Error("Failed to reload channel config", zap.Error(err))
+				return err
+			}
+
+			// Update session manager configuration
+			if newCfg.Session.Reset != nil {
+				p := session.ToResetPolicy(&session.SessionResetConfigLike{
+					Mode:        newCfg.Session.Reset.Mode,
+					AtHour:      newCfg.Session.Reset.AtHour,
+					IdleMinutes: newCfg.Session.Reset.IdleMinutes,
+				})
+				sessionMgr.SetResetPolicy(&p)
+				gatewayServer.SetSessionResetPolicy(&p)
+			}
+
+			// Broadcast config reload notification to all connected clients
+			gatewayServer.BroadcastConfigReload()
+
+			logger.Info("Configuration reloaded successfully")
+			return nil
+		}); err != nil {
+			logger.Warn("Failed to register config change handler", zap.Error(err))
+		}
 	}
 
 	// Start channels
@@ -1061,7 +1130,71 @@ func startWindowsService() {
 	}
 }
 
+// stopGatewayProcessByPort finds the process listening on the gateway port and kills it.
+// Used when gateway was started with "gateway run" (not as service). Windows only.
+func stopGatewayProcessByPort(port int) bool {
+	if port == 0 {
+		port = 28789
+	}
+	cmd := exec.Command("netstat", "-ano")
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	portStr := fmt.Sprintf(":%d", port)
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if !strings.Contains(line, "LISTENING") || !strings.Contains(line, portStr) {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+		pidStr := fields[len(fields)-1]
+		var pid int
+		if _, err := fmt.Sscanf(pidStr, "%d", &pid); err != nil {
+			continue
+		}
+		if pid <= 0 {
+			continue
+		}
+		killCmd := exec.Command("taskkill", "/PID", fmt.Sprint(pid), "/F")
+		if killErr := killCmd.Run(); killErr != nil {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func stopWindowsService() {
+	// Check if service exists first (avoid confusing 1060 "service not installed")
+	checkCmd := exec.Command("sc.exe", "query", windowsServiceName)
+	checkOut, checkErr := checkCmd.CombinedOutput()
+	if checkErr != nil || !strings.Contains(string(checkOut), windowsServiceName) {
+		// Not a service: try to stop process started with "gateway run" (by port)
+		ports := []int{gatewayPort}
+		if gatewayPort == 0 {
+			ports = []int{28789, 28790, 28791}
+		}
+		fmt.Println("Gateway is not installed as a Windows service.")
+		for _, port := range ports {
+			if port == 0 {
+				continue
+			}
+			if stopGatewayProcessByPort(port) {
+				fmt.Printf("Stopped gateway process (was listening on port %d).\n", port)
+				return
+			}
+		}
+		fmt.Println("No gateway process found on port(s)", ports)
+		fmt.Println("If you started gateway with 'goclaw gateway run', stop it with Ctrl+C in that terminal,")
+		fmt.Println("or end the goclaw.exe process in Task Manager.")
+		fmt.Println("\nTo run as a service: goclaw gateway install")
+		os.Exit(1)
+	}
+
 	// Stop the service
 	fmt.Printf("Stopping service: %s\n", windowsServiceName)
 	cmd := exec.Command("sc.exe", "stop", windowsServiceName)
@@ -1129,4 +1262,109 @@ func runGatewayCall(cmd *cobra.Command, args []string) {
 	fmt.Printf("Request: %s\n", string(requestBody))
 	fmt.Println("\nNote: RPC calls require WebSocket connection")
 	fmt.Println("Use the WebSocket API to call methods directly")
+}
+
+// runGatewayReload reloads gateway configuration
+func runGatewayReload(cmd *cobra.Command, args []string) {
+	fmt.Println("Reloading gateway configuration...")
+
+	// Load configuration
+	cfg, err := config.Load("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+
+	configFile := config.ConfigFileUsed()
+	if configFile == "" {
+		fmt.Println("No config file in use, cannot reload")
+		os.Exit(1)
+	}
+
+	fmt.Printf("Config file: %s\n", configFile)
+
+	// Validate configuration
+	if err := config.Validate(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "Invalid configuration: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Update global config
+	config.Set(cfg)
+
+	fmt.Println("Configuration reloaded successfully")
+	fmt.Println("\nNote: If gateway is running as a service, restart it to apply changes:")
+	fmt.Println("  goclaw gateway restart")
+}
+
+// runGatewayHistory shows configuration change history
+func runGatewayHistory(cmd *cobra.Command, args []string) {
+	fmt.Println("Configuration Change History")
+	fmt.Println("============================")
+	fmt.Println()
+
+	history := config.GetHistory(20) // 显示最近 20 条记录
+
+	if len(history) == 0 {
+		fmt.Println("No configuration changes recorded yet.")
+		return
+	}
+
+	for i, change := range history {
+		fmt.Printf("[%d] %s\n", i, change.Timestamp.Format("2006-01-02 15:04:05"))
+		fmt.Printf("    Triggered by: %s\n", change.TriggeredBy)
+		fmt.Printf("    Success: %v\n", change.Success)
+
+		if change.Error != "" {
+			fmt.Printf("    Error: %s\n", change.Error)
+		}
+
+		if len(change.Changes) > 0 {
+			fmt.Println("    Changes:")
+			for key, value := range change.Changes {
+				if changeMap, ok := value.(map[string]interface{}); ok {
+					fmt.Printf("      %s: %v -> %v\n", key, changeMap["old"], changeMap["new"])
+				}
+			}
+		}
+
+		fmt.Println()
+	}
+
+	fmt.Printf("Total: %d changes\n", len(history))
+	fmt.Println("\nUse 'goclaw gateway rollback <index>' to rollback to a previous configuration")
+}
+
+// runGatewayRollback rollbacks to a previous configuration
+func runGatewayRollback(cmd *cobra.Command, args []string) {
+	if len(args) == 0 {
+		// 回滚到最近一次成功的配置
+		fmt.Println("Rolling back to latest successful configuration...")
+
+		if err := config.RollbackToLatest(); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to rollback: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Println("Successfully rolled back to latest configuration")
+	} else {
+		// 回滚到指定索引的配置
+		var index int
+		if _, err := fmt.Sscanf(args[0], "%d", &index); err != nil {
+			fmt.Fprintf(os.Stderr, "Invalid index: %s\n", args[0])
+			os.Exit(1)
+		}
+
+		fmt.Printf("Rolling back to configuration at index %d...\n", index)
+
+		if err := config.RollbackConfig(index); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to rollback: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("Successfully rolled back to configuration at index %d\n", index)
+	}
+
+	fmt.Println("\nNote: If gateway is running, restart it to apply changes:")
+	fmt.Println("  goclaw gateway restart")
 }

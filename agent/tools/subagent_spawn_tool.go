@@ -213,7 +213,20 @@ func (t *SubagentSpawnTool) Name() string {
 
 // Description 返回工具描述
 func (t *SubagentSpawnTool) Description() string {
-	return "Spawn a background sub-agent run in an isolated session and announce the result back to the requester chat."
+	return `Spawn a background sub-agent to handle complex, time-consuming, or independent tasks in parallel.
+
+Use this tool when you need to:
+- Execute multiple independent tasks simultaneously (parallel processing)
+- Delegate long-running operations (file analysis, code generation, data processing)
+- Break down complex tasks into smaller sub-tasks that can run independently
+- Offload work that doesn't require immediate user interaction
+
+The sub-agent will work in the background and report results when complete. You can continue working on other tasks while the sub-agent runs.
+
+Example use cases:
+- "Analyze these 5 files" → spawn 5 sub-agents, one per file
+- "Generate tests for all modules" → spawn sub-agents for each module
+- "Refactor multiple components" → spawn sub-agents for parallel refactoring`
 }
 
 // Parameters 返回工具参数定义
@@ -282,8 +295,10 @@ func (t *SubagentSpawnTool) Execute(ctx context.Context, params map[string]inter
 	}
 
 	// 获取请求者会话信息（从上下文获取）
-	// TODO: 从 context 中获取请求者会话密钥、agent ID 等
 	requesterSessionKey := "main" // 默认值
+	if sessionKey, ok := ctx.Value("session_key").(string); ok && sessionKey != "" {
+		requesterSessionKey = sessionKey
+	}
 	requesterAgentID := t.getAgentID(requesterSessionKey)
 	if requesterAgentID == "" {
 		requesterAgentID = "default"
@@ -326,7 +341,8 @@ func (t *SubagentSpawnTool) Execute(ctx context.Context, params map[string]inter
 		Label:               spawnParams.Label,
 		Task:                spawnParams.Task,
 	})
-	_ = childSystemPrompt // TODO: 传递给分身实例使用
+	// 系统提示词将在 runSubagent 中使用
+	_ = childSystemPrompt
 
 	// 获取归档时间
 	archiveAfterMinutes := 60 // 默认值

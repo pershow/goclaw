@@ -135,9 +135,13 @@ async function sendChatMessageNow(
 }
 
 async function flushChatQueue(host: ChatHost) {
-  if (!host.connected || isChatBusy(host)) {
+  if (!host.connected) {
     return;
   }
+  // 移除忙碌检查，允许并发发送队列中的消息
+  // if (isChatBusy(host)) {
+  //   return;
+  // }
   const [next, ...rest] = host.chatQueue;
   if (!next) {
     return;
@@ -187,10 +191,12 @@ export async function handleSendChat(
     host.chatAttachments = [];
   }
 
-  if (isChatBusy(host)) {
-    enqueueChatMessage(host, message, attachmentsToSend, refreshSessions);
-    return;
-  }
+  // 允许并发发送消息，不再检查忙碌状态
+  // 后端已改为异步处理，主 agent 可以在处理任务时接收新消息
+  // if (isChatBusy(host)) {
+  //   enqueueChatMessage(host, message, attachmentsToSend, refreshSessions);
+  //   return;
+  // }
 
   await sendChatMessageNow(host, message, {
     previousDraft: messageOverride == null ? previousDraft : undefined,

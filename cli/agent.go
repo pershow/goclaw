@@ -64,9 +64,9 @@ func runAgent(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Initialize logger if verbose or thinking mode is enabled（同时写入日志文件）
+	// Initialize logger if verbose or thinking mode is enabled（按日期写入 logs/goclaw-2006-01-02.log）
 	if agentVerbose || agentThinking {
-		logPath := filepath.Join(internal.GetGoclawDir(), "logs", "goclaw.log")
+		logPath := filepath.Join(internal.GetGoclawDir(), "logs", "goclaw-"+time.Now().Format("2006-01-02")+".log")
 		if err := logger.InitWithFile("debug", false, logPath); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
 			os.Exit(1)

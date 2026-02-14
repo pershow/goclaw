@@ -213,10 +213,18 @@ func (o *Orchestrator) runLoop(ctx context.Context, state *AgentState) ([]AgentM
 				return state.Messages, err
 			}
 
+			// LLM 返回空回复且无 tool calls 时视为异常，避免静默结束、只交互一次
+			toolCalls := extractToolCalls(assistantMsg)
+			if strings.TrimSpace(extractTextContent(assistantMsg)) == "" && len(toolCalls) == 0 {
+				emptyErr := fmt.Errorf("LLM 返回了空回复，请稍后重试或检查模型与代理配置（若为 9router/心流可尝试 model_request_interval_seconds 或更换模型）")
+				logger.Warn("Empty LLM response, treating as error", zap.Error(emptyErr))
+				o.emitErrorEnd(state, emptyErr)
+				return state.Messages, emptyErr
+			}
+
 			state.AddMessage(assistantMsg)
 
 			// Check for tool calls
-			toolCalls := extractToolCalls(assistantMsg)
 			hasMoreToolCalls = len(toolCalls) > 0
 
 			if hasMoreToolCalls {

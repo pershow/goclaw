@@ -268,3 +268,37 @@ release-notes:
 	@echo "$(COLOR_BLUE)Generating release notes...$(COLOR_RESET)"
 	goreleaser release --release-notes=release-notes.txt --skip=publish --skip=validate --skip=announce
 
+## test-hot-reload: Test configuration hot reload functionality
+test-hot-reload:
+	@echo "$(COLOR_BLUE)Testing configuration hot reload...$(COLOR_RESET)"
+	$(GOTEST) -v -run TestWatcher ./config/
+
+## example-hot-reload: Run hot reload example
+example-hot-reload:
+	@echo "$(COLOR_BLUE)Running hot reload example...$(COLOR_RESET)"
+	@echo "$(COLOR_YELLOW)This will create a temporary config file and watch for changes$(COLOR_RESET)"
+	$(GOCMD) run ./examples/hot_reload/main.go
+
+## build-ui: Build the Web UI
+build-ui:
+	@echo "$(COLOR_BLUE)Building Web UI...$(COLOR_RESET)"
+	@if [ -f "build-ui.sh" ]; then \
+		./build-ui.sh; \
+	elif [ -f "build-ui.bat" ]; then \
+		./build-ui.bat; \
+	else \
+		echo "$(COLOR_YELLOW)No build script found$(COLOR_RESET)"; \
+	fi
+	@echo "$(COLOR_GREEN)UI build complete$(COLOR_RESET)"
+
+## demo: Run demo with UI
+demo:
+	@echo "$(COLOR_BLUE)Starting demo...$(COLOR_RESET)"
+	@if [ -f "demo.sh" ]; then \
+		./demo.sh; \
+	elif [ -f "demo.bat" ]; then \
+		./demo.bat; \
+	else \
+		echo "$(COLOR_YELLOW)No demo script found$(COLOR_RESET)"; \
+	fi
+

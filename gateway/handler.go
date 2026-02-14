@@ -57,12 +57,71 @@ func (h *Handler) SetLastHeartbeat(getter func() int64) {
 	h.lastHeartbeatGetter = getter
 }
 
-// getSession 获取或创建会话；若已设置 sessionPolicy 则按策略判定是否重置
-func (h *Handler) getSession(key string) (*session.Session, error) {
-	if h.sessionPolicy != nil {
-		return h.sessionMgr.GetOrCreateWithPolicy(key, h.sessionPolicy)
+// classifySessionKeyForList 与 OpenClaw GatewaySessionRow.kind 一致：direct | group | global | unknown
+func classifySessionKeyForList(key string) string {
+	if key == "global" {
+		return "global"
 	}
-	return h.sessionMgr.GetOrCreate(key)
+	if key == "unknown" {
+		return "unknown"
+	}
+	if session.IsGroupSessionKey(key) {
+		return "group"
+	}
+	return "direct"
+}
+
+// resolveGatewaySessionKey 将前端传入的 key（如 "main"）解析为规范 sessionKey，与 OpenClaw 一致
+func resolveGatewaySessionKey(key string) string {
+	k := strings.TrimSpace(key)
+	if k == "" {
+		return ""
+	}
+	if k == "global" || k == "unknown" {
+		return k
+	}
+	cfg := config.Get()
+	if cfg == nil {
+		return k
+	}
+	mainKey := strings.TrimSpace(cfg.Session.MainKey)
+	if mainKey == "" {
+		mainKey = "main"
+	}
+	scope := strings.TrimSpace(cfg.Session.Scope)
+	if scope == "" {
+		scope = "per-sender"
+	}
+	if k == "main" || k == mainKey {
+		if scope == "global" {
+			return "global"
+		}
+		defaultAgentId := "main"
+		if len(cfg.Agents.List) > 0 {
+			if id := strings.TrimSpace(cfg.Agents.List[0].ID); id != "" {
+				defaultAgentId = id
+			} else if name := strings.TrimSpace(cfg.Agents.List[0].Name); name != "" {
+				defaultAgentId = name
+			}
+		}
+		return session.BuildAgentMainSessionKey(defaultAgentId, mainKey)
+	}
+	if session.IsAgentSessionKey(k) {
+		return k
+	}
+	return k
+}
+
+// getSession 获取或创建会话；key 会先解析为规范 sessionKey（如 "main" -> agent:main:main）；若已设置 sessionPolicy 则按策略判定是否重置
+func (h *Handler) getSession(key string) (*session.Session, error) {
+	canonical := resolveGatewaySessionKey(key)
+	if canonical == "" {
+		return nil, fmt.Errorf("session key is required")
+	}
+	if h.sessionPolicy != nil {
+		return h.sessionMgr.GetOrCreateWithPolicy(canonical, h.sessionPolicy)
+	}
+	return h.sessionMgr.GetOrCreate(canonical)
 }
 
 // buildConnectSnapshot 构造 connect 返回的 snapshot，与 OpenClaw 对齐：含 sessionDefaults，
@@ -1055,17 +1114,27 @@ func (h *Handler) registerSystemMethods() {
 		return map[string]interface{}{"message": "Installed"}, nil
 	})
 
+	// resolveWorkspace 优先用 params，否则用配置中的 workspace.path（与 agent 使用同一工作区）
+	resolveWorkspace := func(params map[string]interface{}) string {
+		if w, _ := params["workspace"].(string); w != "" {
+			return w
+		}
+		if cfg := config.Get(); cfg != nil {
+			if p, err := config.GetWorkspacePath(cfg); err == nil && p != "" {
+				return p
+			}
+		}
+		homeDir, _ := os.UserHomeDir()
+		return filepath.Join(homeDir, ".goclaw", "workspace")
+	}
+
 	// agents.files.list - Agent 工作区文件列表
 	h.registry.Register("agents.files.list", func(sessionID string, params map[string]interface{}) (interface{}, error) {
 		agentId, _ := params["agentId"].(string)
 		if agentId == "" {
 			return nil, fmt.Errorf("agentId is required")
 		}
-		workspace, _ := params["workspace"].(string)
-		if workspace == "" {
-			homeDir, _ := os.UserHomeDir()
-			workspace = filepath.Join(homeDir, ".goclaw", "workspace")
-		}
+		workspace := resolveWorkspace(params)
 		entries, err := os.ReadDir(workspace)
 		if err != nil {
 			return map[string]interface{}{"agentId": agentId, "workspace": workspace, "files": []interface{}{}}, nil
@@ -1091,11 +1160,7 @@ func (h *Handler) registerSystemMethods() {
 		if agentId == "" || path == "" {
 			return nil, fmt.Errorf("agentId and path are required")
 		}
-		workspace, _ := params["workspace"].(string)
-		if workspace == "" {
-			homeDir, _ := os.UserHomeDir()
-			workspace = filepath.Join(homeDir, ".goclaw", "workspace")
-		}
+		workspace := resolveWorkspace(params)
 		fullPath := filepath.Join(workspace, filepath.Clean(path))
 		rel, err := filepath.Rel(workspace, fullPath)
 		if err != nil || strings.HasPrefix(rel, "..") {
@@ -1119,11 +1184,7 @@ func (h *Handler) registerSystemMethods() {
 		if agentId == "" || path == "" {
 			return nil, fmt.Errorf("agentId and path are required")
 		}
-		workspace, _ := params["workspace"].(string)
-		if workspace == "" {
-			homeDir, _ := os.UserHomeDir()
-			workspace = filepath.Join(homeDir, ".goclaw", "workspace")
-		}
+		workspace := resolveWorkspace(params)
 		fullPath := filepath.Join(workspace, filepath.Clean(path))
 		rel, err := filepath.Rel(workspace, fullPath)
 		if err != nil || strings.HasPrefix(rel, "..") {
@@ -1293,6 +1354,11 @@ func (h *Handler) registerAgentMethods() {
 		history := sess.GetHistory(limit)
 		messages := make([]map[string]interface{}, 0, len(history))
 		for _, m := range history {
+			// 跳过只有工具调用而没有文本内容的 assistant 消息
+			if m.Role == "assistant" && strings.TrimSpace(m.Content) == "" && len(m.ToolCalls) > 0 {
+				continue
+			}
+
 			msg := map[string]interface{}{
 				"role": m.Role, "content": m.Content, "timestamp": m.Timestamp,
 			}
@@ -1336,7 +1402,7 @@ func (h *Handler) registerAgentMethods() {
 		}, nil
 	})
 
-	// sessions.list - 列出会话（返回规范 sessionKey、按 updatedAt 倒序、默认条数限制，与 openclaw 一致避免前端一长串）
+	// sessions.list - 列出会话（与 OpenClaw 一致：key/kind/label/displayName/sessionId/updatedAt/spawnedBy、过滤 includeGlobal/includeUnknown/label/spawnedBy/agentId/activeMinutes、按 updatedAt 倒序）
 	h.registry.Register("sessions.list", func(sessionID string, params map[string]interface{}) (interface{}, error) {
 		keys, err := h.sessionMgr.List()
 		if err != nil {
@@ -1361,24 +1427,95 @@ func (h *Handler) registerAgentMethods() {
 		if limit <= 0 {
 			limit = 20
 		}
+		includeGlobal := false
+		if v, ok := params["includeGlobal"].(bool); ok {
+			includeGlobal = v
+		}
+		includeUnknown := false
+		if v, ok := params["includeUnknown"].(bool); ok {
+			includeUnknown = v
+		}
+		filterLabel := ""
+		if v, ok := params["label"].(string); ok {
+			filterLabel = strings.TrimSpace(v)
+		}
+		filterSpawnedBy := ""
+		if v, ok := params["spawnedBy"].(string); ok {
+			filterSpawnedBy = strings.TrimSpace(v)
+		}
+		filterAgentId := ""
+		if v, ok := params["agentId"].(string); ok {
+			filterAgentId = strings.TrimSpace(v)
+		}
+		activeMinutes := 0
+		if v, ok := params["activeMinutes"]; ok {
+			switch n := v.(type) {
+			case float64:
+				activeMinutes = int(n)
+			case int:
+				activeMinutes = n
+			}
+		}
+		nowMs := time.Now().UnixMilli()
+		cutoffMs := int64(0)
+		if activeMinutes > 0 {
+			cutoffMs = nowMs - int64(activeMinutes)*60*1000
+		}
+
 		sessions := make([]map[string]interface{}, 0, len(keys))
 		for _, key := range keys {
+			if !includeGlobal && key == "global" {
+				continue
+			}
+			if !includeUnknown && key == "unknown" {
+				continue
+			}
+			if filterAgentId != "" && key != "global" && key != "unknown" {
+				agentID, _, ok := session.ParseAgentSessionKey(key)
+				if !ok || !strings.EqualFold(strings.TrimSpace(agentID), filterAgentId) {
+					continue
+				}
+			}
 			sess, err := h.getSession(key)
 			if err != nil {
 				continue
 			}
-			canonicalKey := canonicalSessionKeyForBroadcast(sess.Key)
+			if filterLabel != "" {
+				lab, _ := sess.Metadata["label"].(string)
+				if strings.TrimSpace(lab) != filterLabel {
+					continue
+				}
+			}
+			if filterSpawnedBy != "" {
+				sb, _ := sess.Metadata["spawnedBy"].(string)
+				if strings.TrimSpace(sb) != filterSpawnedBy {
+					continue
+				}
+			}
 			updatedAtMs := sess.UpdatedAt.UnixMilli()
+			if cutoffMs > 0 && updatedAtMs < cutoffMs {
+				continue
+			}
+			canonicalKey := canonicalSessionKeyForBroadcast(sess.Key)
+			kind := classifySessionKeyForList(sess.Key)
 			row := map[string]interface{}{
-				"key":       canonicalKey,
-				"kind":      "direct",
-				"updatedAt": updatedAtMs,
+				"key":        canonicalKey,
+				"kind":       kind,
+				"sessionId":  canonicalKey,
+				"updatedAt":  updatedAtMs,
 			}
 			if v, ok := sess.Metadata["label"]; ok && v != nil {
 				row["label"] = v
+			}
+			if v, ok := sess.Metadata["displayName"]; ok && v != nil {
+				row["displayName"] = v
+			} else if v, ok := sess.Metadata["label"]; ok && v != nil {
 				row["displayName"] = v
 			} else {
 				row["displayName"] = canonicalKey
+			}
+			if v, ok := sess.Metadata["spawnedBy"]; ok && v != nil {
+				row["spawnedBy"] = v
 			}
 			if v, ok := sess.Metadata["thinkingLevel"]; ok && v != nil {
 				row["thinkingLevel"] = v
@@ -1389,11 +1526,9 @@ func (h *Handler) registerAgentMethods() {
 			if v, ok := sess.Metadata["reasoningLevel"]; ok && v != nil {
 				row["reasoningLevel"] = v
 			}
-			row["message_count"] = len(sess.Messages)
 			sessions = append(sessions, row)
 		}
 
-		// 按更新时间倒序，只返回前 limit 条
 		sort.Slice(sessions, func(i, j int) bool {
 			a, _ := sessions[i]["updatedAt"].(int64)
 			b, _ := sessions[j]["updatedAt"].(int64)
@@ -1412,15 +1547,49 @@ func (h *Handler) registerAgentMethods() {
 		}, nil
 	})
 
-	// sessions.patch - 按 key 更新会话元数据（label, thinkingLevel, verboseLevel, reasoningLevel）
+	// sessions.patch - 按 key 更新会话元数据（与 OpenClaw 一致：label, thinkingLevel, verboseLevel, reasoningLevel, model, spawnedBy 仅子会话, deleteTranscript）
 	h.registry.Register("sessions.patch", func(sessionID string, params map[string]interface{}) (interface{}, error) {
 		key, ok := params["key"].(string)
 		if !ok || key == "" {
 			return nil, fmt.Errorf("key parameter is required")
 		}
+		canonicalKey := resolveGatewaySessionKey(key)
 		sess, err := h.getSession(key)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get session: %w", err)
+		}
+		if v, ok := params["label"]; ok && v != nil {
+			newLabel := strings.TrimSpace(fmt.Sprintf("%v", v))
+			allKeys, _ := h.sessionMgr.List()
+			for _, k := range allKeys {
+				if k == canonicalKey {
+					continue
+				}
+				other, _ := h.sessionMgr.GetOrCreate(k)
+				if other.Metadata != nil {
+					if lab, _ := other.Metadata["label"].(string); strings.TrimSpace(lab) == newLabel {
+						return nil, fmt.Errorf("label already in use: %s", newLabel)
+					}
+				}
+			}
+		}
+		if v, ok := params["spawnedBy"]; ok {
+			if v == nil {
+				if existing, _ := sess.Metadata["spawnedBy"].(string); existing != "" {
+					return nil, fmt.Errorf("spawnedBy cannot be cleared once set")
+				}
+			} else {
+				sv := strings.TrimSpace(fmt.Sprintf("%v", v))
+				if sv == "" {
+					return nil, fmt.Errorf("invalid spawnedBy: empty")
+				}
+				if !session.IsSubagentSessionKey(canonicalKey) {
+					return nil, fmt.Errorf("spawnedBy is only supported for subagent:* sessions")
+				}
+				if existing, _ := sess.Metadata["spawnedBy"].(string); existing != "" && existing != sv {
+					return nil, fmt.Errorf("spawnedBy cannot be changed once set")
+				}
+			}
 		}
 		updates := make(map[string]interface{})
 		if v, ok := params["label"]; ok {
@@ -1435,35 +1604,48 @@ func (h *Handler) registerAgentMethods() {
 		if v, ok := params["reasoningLevel"]; ok {
 			updates["reasoningLevel"] = v
 		}
+		if v, ok := params["model"]; ok {
+			updates["modelOverride"] = v
+		}
+		if v, ok := params["spawnedBy"]; ok {
+			updates["spawnedBy"] = v
+		}
 		sess.PatchMetadata(updates)
+		if v, ok := params["deleteTranscript"].(bool); ok && v {
+			sess.Clear()
+		}
 		if err := h.sessionMgr.Save(sess); err != nil {
 			return nil, fmt.Errorf("failed to save session: %w", err)
 		}
+		entry := map[string]interface{}{
+			"sessionId": canonicalKey,
+			"updatedAt": sess.UpdatedAt.UnixMilli(),
+		}
+		for _, k := range []string{"label", "thinkingLevel", "verboseLevel", "reasoningLevel", "modelOverride", "spawnedBy"} {
+			if v, ok := sess.Metadata[k]; ok && v != nil {
+				entry[k] = v
+			}
+		}
 		return map[string]interface{}{
-			"ok": true, "path": h.sessionMgr.Path(), "key": key,
-			"entry": map[string]interface{}{
-				"sessionId":      key,
-				"updatedAt":      sess.UpdatedAt.UnixMilli(),
-				"thinkingLevel":  updates["thinkingLevel"],
-				"verboseLevel":   updates["verboseLevel"],
-				"reasoningLevel": updates["reasoningLevel"],
-			},
+			"ok": true, "path": h.sessionMgr.Path(), "key": canonicalKey,
+			"entry": entry,
 		}, nil
 	})
 
-	// sessions.delete - 按 key 删除会话（含 transcript）
+	// sessions.delete - 按 key 删除会话（含 transcript）；key 支持 "main" 等别名，会解析为规范 key
 	h.registry.Register("sessions.delete", func(sessionID string, params map[string]interface{}) (interface{}, error) {
 		key, ok := params["key"].(string)
 		if !ok || key == "" {
 			return nil, fmt.Errorf("key parameter is required")
 		}
-		if err := h.sessionMgr.Delete(key); err != nil {
+		canonicalKey := resolveGatewaySessionKey(key)
+		if err := h.sessionMgr.Delete(canonicalKey); err != nil {
 			return nil, fmt.Errorf("failed to delete session: %w", err)
 		}
-		return map[string]interface{}{"ok": true, "key": key}, nil
+		return map[string]interface{}{"ok": true, "key": canonicalKey}, nil
 	})
 
-	// sessions.get - 获取会话详情
+	// sessions.get - 获取会话详情（与 OpenClaw 一致：key/sessionId、messages、entry 元数据）
 	h.registry.Register("sessions.get", func(sessionID string, params map[string]interface{}) (interface{}, error) {
 		key, ok := params["key"].(string)
 		if !ok {
@@ -1475,13 +1657,101 @@ func (h *Handler) registerAgentMethods() {
 			return nil, fmt.Errorf("failed to get session: %w", err)
 		}
 
+		entry := map[string]interface{}{
+			"sessionId": sess.Key,
+			"updatedAt": sess.UpdatedAt.UnixMilli(),
+		}
+		if sess.Metadata != nil {
+			for k, v := range sess.Metadata {
+				if v != nil {
+					entry[k] = v
+				}
+			}
+		}
 		return map[string]interface{}{
 			"key":        sess.Key,
+			"sessionId":  sess.Key,
 			"messages":   sess.Messages,
 			"created_at": sess.CreatedAt,
 			"updated_at": sess.UpdatedAt,
 			"metadata":   sess.Metadata,
+			"entry":      entry,
 		}, nil
+	})
+
+	// sessions.resolve - 由 key / sessionId / label 解析为规范 sessionKey（与 OpenClaw 一致）
+	h.registry.Register("sessions.resolve", func(sessionID string, params map[string]interface{}) (interface{}, error) {
+		key, _ := params["key"].(string)
+		key = strings.TrimSpace(key)
+		sessionId, _ := params["sessionId"].(string)
+		sessionId = strings.TrimSpace(sessionId)
+		label, _ := params["label"].(string)
+		label = strings.TrimSpace(label)
+		hasKey := key != ""
+		hasSessionId := sessionId != ""
+		hasLabel := label != ""
+		n := 0
+		if hasKey {
+			n++
+		}
+		if hasSessionId {
+			n++
+		}
+		if hasLabel {
+			n++
+		}
+		if n > 1 {
+			return nil, fmt.Errorf("provide either key, sessionId, or label (not multiple)")
+		}
+		if n == 0 {
+			return nil, fmt.Errorf("either key, sessionId, or label is required")
+		}
+		if hasKey {
+			canonical := resolveGatewaySessionKey(key)
+			keys, err := h.sessionMgr.List()
+			if err != nil {
+				return nil, err
+			}
+			for _, k := range keys {
+				if k == canonical {
+					return map[string]interface{}{"ok": true, "key": canonical}, nil
+				}
+			}
+			return nil, fmt.Errorf("no session found: %s", key)
+		}
+		if hasSessionId {
+			canonical := resolveGatewaySessionKey(sessionId)
+			keys, err := h.sessionMgr.List()
+			if err != nil {
+				return nil, err
+			}
+			for _, k := range keys {
+				if k == canonical {
+					return map[string]interface{}{"ok": true, "key": canonical}, nil
+				}
+			}
+			// sessionId 可能是字面 key，再按列表中的 key 匹配
+			for _, k := range keys {
+				if k == sessionId {
+					return map[string]interface{}{"ok": true, "key": k}, nil
+				}
+			}
+			return nil, fmt.Errorf("no session found: %s", sessionId)
+		}
+		keys, err := h.sessionMgr.List()
+		if err != nil {
+			return nil, err
+		}
+		for _, k := range keys {
+			sess, err := h.getSession(k)
+			if err != nil {
+				continue
+			}
+			if lab, _ := sess.Metadata["label"].(string); strings.TrimSpace(lab) == label {
+				return map[string]interface{}{"ok": true, "key": sess.Key}, nil
+			}
+		}
+		return nil, fmt.Errorf("no session found for label: %s", label)
 	})
 
 	// sessions.clear - 清空会话

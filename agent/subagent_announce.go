@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/smallnest/goclaw/internal/logger"
@@ -25,6 +26,8 @@ type SubagentAnnounceParams struct {
 	RequesterDisplayKey string
 	Task                string
 	Label               string
+	// LatestReply 子会话最后一条 assistant 回复（与 OpenClaw readLatestAssistantReply 对齐）
+	LatestReply string
 	StartedAt           *int64
 	EndedAt             *int64
 	Outcome             *SubagentRunOutcome
@@ -88,6 +91,12 @@ func (a *SubagentAnnouncer) RunAnnounceFlow(params *SubagentAnnounceParams) erro
 		artifactsLine = "\nArtifacts: " + fmt.Sprintf("%d item(s)", len(params.Outcome.Artifacts))
 	}
 
+	// Findings 使用子会话最后一条 assistant 回复（与 OpenClaw 一致）；无则用 "(no output)"
+	findings := strings.TrimSpace(params.LatestReply)
+	if findings == "" {
+		findings = "(no output)"
+	}
+
 	// 构建宣告消息
 	triggerMessage := fmt.Sprintf(`A %s "%s" just %s.
 
@@ -100,7 +109,7 @@ Findings:
 Summarize this naturally for the user. Keep it brief (1-2 sentences). Flow it into the conversation naturally.
 Do not mention technical details like tokens, stats, or that this was a %s.
 You can respond with NO_REPLY if no announcement is needed (e.g., internal task with no user-facing result).`,
-		announceType, taskLabel, statusLabel, params.Task, artifactsLine, statsLine, announceType)
+		announceType, taskLabel, statusLabel, findings, artifactsLine, statsLine, announceType)
 
 	// 发送宣告到主 Agent
 	if err := a.onAnnounce(params.RequesterSessionKey, triggerMessage); err != nil {

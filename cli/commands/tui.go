@@ -415,7 +415,7 @@ func processTUIDialogue(
 	agentMsgs := sessionMessagesToAgentMessages(history)
 
 	// Run orchestrator
-	finalMessages, err := orchestrator.Run(ctx, agentMsgs)
+	finalMessages, err := orchestrator.Run(ctx, agentMsgs, nil)
 	if err != nil {
 		return fmt.Sprintf("Error: %v", err)
 	}

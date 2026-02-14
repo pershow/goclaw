@@ -15,12 +15,14 @@ import (
 
 // OpenAIProvider OpenAI provider
 type OpenAIProvider struct {
-	client           openai.Client
-	model            string
-	baseURL          string
-	maxTokens        int
-	extraBody        map[string]interface{}
-	streamingEnabled bool // 是否启用流式输出
+	client            openai.Client
+	model             string
+	baseURL           string
+	maxTokens         int
+	extraBody         map[string]interface{}
+	streamingEnabled  bool // 是否启用流式输出
+	router9Compatible bool // 9router 兼容模式
+	skipTools         bool // 9router 下为 true 时不传 tools，用于排查 406
 }
 
 // NewOpenAIProvider creates an OpenAI provider.
@@ -29,7 +31,8 @@ func NewOpenAIProvider(apiKey, baseURL, model string, maxTokens int, extraBody m
 }
 
 // NewOpenAIProviderWithStreaming creates an OpenAI provider with streaming configuration.
-func NewOpenAIProviderWithStreaming(apiKey, baseURL, model string, maxTokens int, extraBody map[string]interface{}, streaming bool) (*OpenAIProvider, error) {
+// 若 optSkipTools 传 true（仅 9router 配置 tools_enabled: false 时），请求时不带 tools，用于排查 406。
+func NewOpenAIProviderWithStreaming(apiKey, baseURL, model string, maxTokens int, extraBody map[string]interface{}, streaming bool, optSkipTools ...bool) (*OpenAIProvider, error) {
 	if apiKey == "" {
 		return nil, fmt.Errorf("API key is required")
 	}
@@ -45,13 +48,31 @@ func NewOpenAIProviderWithStreaming(apiKey, baseURL, model string, maxTokens int
 		clientOpts = append(clientOpts, option.WithBaseURL(baseURL))
 	}
 
+	// 自动检测 9router 代理
+	router9Compatible := strings.Contains(baseURL, "localhost:20128") ||
+		strings.Contains(baseURL, "127.0.0.1:20128") ||
+		strings.Contains(baseURL, ":20128")
+
+	skipTools := false
+	if len(optSkipTools) > 0 {
+		skipTools = optSkipTools[0]
+	}
+
+	if router9Compatible {
+		logger.Debug("Detected 9router proxy, enabling compatibility mode",
+			zap.String("base_url", baseURL),
+			zap.Bool("skip_tools", skipTools))
+	}
+
 	return &OpenAIProvider{
-		client:           openai.NewClient(clientOpts...),
-		model:            model,
-		baseURL:          baseURL,
-		maxTokens:        maxTokens,
-		extraBody:        copyExtraBody(extraBody),
-		streamingEnabled: streaming,
+		client:            openai.NewClient(clientOpts...),
+		model:             model,
+		baseURL:           baseURL,
+		maxTokens:         maxTokens,
+		extraBody:         copyExtraBody(extraBody),
+		streamingEnabled:  streaming,
+		router9Compatible: router9Compatible,
+		skipTools:         skipTools,
 	}, nil
 }
 
@@ -82,17 +103,37 @@ func (p *OpenAIProvider) Chat(ctx context.Context, messages []Message, tools []T
 		Model:    shared.ChatModel(opts.Model),
 		Messages: openAIMessages,
 	}
+	// 仅当配置里显式设置了 temperature 时才传，不硬编码
 	if opts.Temperature > 0 {
 		req.Temperature = openai.Float(opts.Temperature)
 	}
 	if opts.MaxTokens > 0 {
 		req.MaxTokens = openai.Int(int64(opts.MaxTokens))
 	}
-	if len(tools) > 0 {
-		req.Tools = convertToolsToOpenAI(tools)
+	toolsToSend := tools
+	if p.skipTools {
+		toolsToSend = nil
+	}
+	if len(toolsToSend) > 0 {
+		req.Tools = convertToolsToOpenAI(toolsToSend)
 	}
 
-	reqOpts := append(p.extraBodyOptions(), assistantReasoningOptions(messages)...)
+	// 9router 兼容模式：禁用 reasoning_content 和部分 extra_body 参数
+	var reqOpts []option.RequestOption
+	if p.router9Compatible {
+		// 9router 兼容模式：不添加任何 extra_body 和 reasoning_content
+		reqOpts = []option.RequestOption{}
+		logger.Info("9router non-streaming request",
+			zap.String("model", opts.Model),
+			zap.Int("messages", len(openAIMessages)),
+			zap.Int("tools_sent", len(toolsToSend)),
+			zap.Bool("has_temperature", opts.Temperature > 0),
+			zap.Bool("has_max_tokens", opts.MaxTokens > 0),
+			zap.Float64("temperature_value", opts.Temperature),
+			zap.Int("max_tokens_value", opts.MaxTokens))
+	} else {
+		reqOpts = append(p.extraBodyOptions(), assistantReasoningOptions(messages)...)
+	}
 
 	completion, err := p.client.Chat.Completions.New(ctx, req, reqOpts...)
 	if err != nil {
@@ -394,20 +435,54 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, messages []Message, too
 		Model:    shared.ChatModel(opts.Model),
 		Messages: openAIMessages,
 	}
-	// Moonshot/Kimi kimi-k2 系列只接受 temperature=0.6，否则 400
-	if strings.Contains(p.baseURL, "moonshot") {
-		req.Temperature = openai.Float(0.6)
-	} else if opts.Temperature > 0 {
+	// 仅当配置里显式设置了 temperature 时才传，不硬编码
+	if opts.Temperature > 0 {
 		req.Temperature = openai.Float(opts.Temperature)
 	}
 	if opts.MaxTokens > 0 {
 		req.MaxTokens = openai.Int(int64(opts.MaxTokens))
+	}	
+	toolsToSend := tools
+	if p.skipTools {
+		toolsToSend = nil
 	}
-	if len(tools) > 0 {
-		req.Tools = convertToolsToOpenAI(tools)
+	if len(toolsToSend) > 0 {
+		req.Tools = convertToolsToOpenAI(toolsToSend)
 	}
 
-	reqOpts := append(p.extraBodyOptions(), assistantReasoningOptions(messages)...)
+	// 9router 兼容模式：禁用 reasoning_content 和部分 extra_body 参数
+	var reqOpts []option.RequestOption
+	if p.router9Compatible {
+		// 9router 兼容模式：不添加任何 extra_body 和 reasoning_content
+		reqOpts = []option.RequestOption{}
+		logger.Info("9router streaming request",
+			zap.String("model", opts.Model),
+			zap.Int("messages", len(openAIMessages)),
+			zap.Int("tools_sent", len(toolsToSend)),
+			zap.Bool("has_temperature", opts.Temperature > 0),
+			zap.Bool("has_max_tokens", opts.MaxTokens > 0),
+			zap.Float64("temperature_value", opts.Temperature),
+			zap.Int("max_tokens_value", opts.MaxTokens))
+
+		// 详细记录每条消息的角色
+		for i, msg := range openAIMessages {
+			var role string
+			if msg.OfSystem != nil {
+				role = "system"
+			} else if msg.OfUser != nil {
+				role = "user"
+			} else if msg.OfAssistant != nil {
+				role = "assistant"
+			} else if msg.OfTool != nil {
+				role = "tool"
+			} else {
+				role = "unknown"
+			}
+			logger.Debug("Message in request", zap.Int("index", i), zap.String("role", role))
+		}
+	} else {
+		reqOpts = append(p.extraBodyOptions(), assistantReasoningOptions(messages)...)
+	}
 
 	stream := p.client.Chat.Completions.NewStreaming(ctx, req, reqOpts...)
 

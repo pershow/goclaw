@@ -18,17 +18,22 @@ const (
 	ProviderTypeAnthropic  ProviderType = "anthropic"
 	ProviderTypeOpenRouter ProviderType = "openrouter"
 	ProviderTypeMoonshot   ProviderType = "moonshot" // Kimi 月之暗面，OpenAI 兼容 API
+	ProviderTypeRouter9    ProviderType = "9router"  // 9router 本地代理，OpenAI 兼容 API
 )
 
-// NewProvider 创建提供商（支持故障转移和配置轮换）
+// NewProvider 创建提供商（支持故障转移和配置轮换）。若配置了 providers.max_concurrent_calls > 0 则包一层全局并发限制，多 agent 时避免同时请求模型接口导致卡死。
 func NewProvider(cfg *config.Config) (Provider, error) {
-	// 如果启用了故障转移且配置了多个配置，使用轮换提供商
+	var inner Provider
+	var err error
 	if cfg.Providers.Failover.Enabled && len(cfg.Providers.Profiles) > 0 {
-		return NewRotationProviderFromConfig(cfg)
+		inner, err = NewRotationProviderFromConfig(cfg)
+	} else {
+		inner, err = NewSimpleProvider(cfg)
 	}
-
-	// 否则使用单一提供商
-	return NewSimpleProvider(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return WrapProviderWithConcurrencyLimit(inner, cfg.Providers.MaxConcurrentCalls), nil
 }
 
 // NewSimpleProvider 创建单一提供商
@@ -81,6 +86,29 @@ func NewSimpleProvider(cfg *config.Config) (Provider, error) {
 			cfg.Providers.Moonshot.ExtraBody,
 			streaming,
 		)
+	case ProviderTypeRouter9:
+		baseURL := cfg.Providers.Router9.BaseURL
+		if baseURL == "" {
+			baseURL = "http://localhost:20128/v1"
+		}
+		apiKey := cfg.Providers.Router9.APIKey
+		if apiKey == "" {
+			apiKey = "sk_9router"
+		}
+		streaming := true
+		if cfg.Providers.Router9.Streaming != nil {
+			streaming = *cfg.Providers.Router9.Streaming
+		}
+		skipTools := cfg.Providers.Router9.ToolsEnabled != nil && !*cfg.Providers.Router9.ToolsEnabled
+		return NewOpenAIProviderWithStreaming(
+			apiKey,
+			baseURL,
+			model,
+			cfg.Agents.Defaults.MaxTokens,
+			cfg.Providers.Router9.ExtraBody,
+			streaming,
+			skipTools,
+		)
 	default:
 		return nil, fmt.Errorf("unsupported provider type: %s", providerType)
 	}
@@ -106,11 +134,9 @@ func NewRotationProviderFromConfig(cfg *config.Config) (Provider, error) {
 
 	// 添加所有配置
 	for _, profileCfg := range cfg.Providers.Profiles {
-		// 获取流式配置，默认为 true
-		streaming := true
-		if profileCfg.Streaming != nil {
-			streaming = *profileCfg.Streaming
-		}
+		streaming, extraBody := resolveStreamingAndExtraBodyForProfile(cfg, profileCfg.Provider, profileCfg.Streaming, profileCfg.ExtraBody)
+		skipTools := ProviderType(profileCfg.Provider) == ProviderTypeRouter9 &&
+			cfg.Providers.Router9.ToolsEnabled != nil && !*cfg.Providers.Router9.ToolsEnabled
 
 		prov, err := createProviderByTypeWithStreaming(
 			profileCfg.Provider,
@@ -118,8 +144,9 @@ func NewRotationProviderFromConfig(cfg *config.Config) (Provider, error) {
 			profileCfg.BaseURL,
 			cfg.Agents.Defaults.Model,
 			cfg.Agents.Defaults.MaxTokens,
-			profileCfg.ExtraBody,
+			extraBody,
 			streaming,
+			skipTools,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create provider for profile %s: %w", profileCfg.Name, err)
@@ -136,19 +163,18 @@ func NewRotationProviderFromConfig(cfg *config.Config) (Provider, error) {
 	// 如果只有一个配置，返回第一个提供商
 	if len(cfg.Providers.Profiles) == 1 {
 		p := cfg.Providers.Profiles[0]
-		// 获取流式配置，默认为 true
-		streaming := true
-		if p.Streaming != nil {
-			streaming = *p.Streaming
-		}
+		streaming, extraBody := resolveStreamingAndExtraBodyForProfile(cfg, p.Provider, p.Streaming, p.ExtraBody)
+		skipTools := ProviderType(p.Provider) == ProviderTypeRouter9 &&
+			cfg.Providers.Router9.ToolsEnabled != nil && !*cfg.Providers.Router9.ToolsEnabled
 		prov, err := createProviderByTypeWithStreaming(
 			p.Provider,
 			p.APIKey,
 			p.BaseURL,
 			cfg.Agents.Defaults.Model,
 			cfg.Agents.Defaults.MaxTokens,
-			p.ExtraBody,
+			extraBody,
 			streaming,
+			skipTools,
 		)
 		if err != nil {
 			return nil, err
@@ -159,13 +185,39 @@ func NewRotationProviderFromConfig(cfg *config.Config) (Provider, error) {
 	return rotation, nil
 }
 
+// resolveStreamingAndExtraBodyForProfile 解析 profile 的流式与 extra_body：当 profile 未指定时，9router 回退到 providers.9router 配置。
+func resolveStreamingAndExtraBodyForProfile(cfg *config.Config, providerType string, profileStreaming *bool, profileExtraBody map[string]interface{}) (streaming bool, extraBody map[string]interface{}) {
+	if ProviderType(providerType) == ProviderTypeRouter9 {
+		if profileStreaming != nil {
+			streaming = *profileStreaming
+		} else if cfg.Providers.Router9.Streaming != nil {
+			streaming = *cfg.Providers.Router9.Streaming
+
+			} else {
+			streaming = true
+		}
+		if len(profileExtraBody) > 0 {
+			extraBody = profileExtraBody
+		} else {
+			extraBody = cfg.Providers.Router9.ExtraBody
+		}
+		return streaming, extraBody
+	}
+	streaming = true
+	if profileStreaming != nil {
+		streaming = *profileStreaming
+	}
+	return streaming, profileExtraBody
+}
+
 // createProviderByType 根据类型创建提供商
 func createProviderByType(providerType, apiKey, baseURL, model string, maxTokens int, extraBody map[string]interface{}) (Provider, error) {
 	return createProviderByTypeWithStreaming(providerType, apiKey, baseURL, model, maxTokens, extraBody, true)
 }
 
-// createProviderByTypeWithStreaming 根据类型创建提供商（带流式配置）
-func createProviderByTypeWithStreaming(providerType, apiKey, baseURL, model string, maxTokens int, extraBody map[string]interface{}, streaming bool) (Provider, error) {
+// createProviderByTypeWithStreaming 根据类型创建提供商（带流式配置）。optSkipTools 仅用于 9router：传 true 时不向 API 传 tools。
+func createProviderByTypeWithStreaming(providerType, apiKey, baseURL, model string, maxTokens int, extraBody map[string]interface{}, streaming bool, optSkipTools ...bool) (Provider, error) {
+	skipTools := len(optSkipTools) > 0 && optSkipTools[0]
 	switch ProviderType(providerType) {
 	case ProviderTypeOpenAI:
 		return NewOpenAIProviderWithStreaming(apiKey, baseURL, model, maxTokens, extraBody, streaming)
@@ -174,7 +226,9 @@ func createProviderByTypeWithStreaming(providerType, apiKey, baseURL, model stri
 	case ProviderTypeOpenRouter:
 		return NewOpenRouterProviderWithStreaming(apiKey, baseURL, model, maxTokens, streaming)
 	case ProviderTypeMoonshot:
-		return NewOpenAIProviderWithStreaming(apiKey, baseURL, model, maxTokens, nil, streaming)
+		return NewOpenAIProviderWithStreaming(apiKey, baseURL, model, maxTokens, extraBody, streaming)
+	case ProviderTypeRouter9:
+		return NewOpenAIProviderWithStreaming(apiKey, baseURL, model, maxTokens, extraBody, streaming, skipTools)
 	default:
 		return nil, fmt.Errorf("unsupported provider type: %s", providerType)
 	}
@@ -204,6 +258,10 @@ func determineProvider(cfg *config.Config) (ProviderType, string, error) {
 		return ProviderTypeMoonshot, model, nil
 	}
 
+	if strings.HasPrefix(model, "9router:") {
+		return ProviderTypeRouter9, strings.TrimPrefix(model, "9router:"), nil
+	}
+
 	// 根据可用的 API key 决定
 	if cfg.Providers.OpenRouter.APIKey != "" {
 		return ProviderTypeOpenRouter, model, nil
@@ -211,6 +269,10 @@ func determineProvider(cfg *config.Config) (ProviderType, string, error) {
 
 	if cfg.Providers.Anthropic.APIKey != "" {
 		return ProviderTypeAnthropic, model, nil
+	}
+
+	if cfg.Providers.Router9.APIKey != "" || cfg.Providers.Router9.BaseURL != "" {
+		return ProviderTypeRouter9, model, nil
 	}
 
 	if cfg.Providers.OpenAI.APIKey != "" {

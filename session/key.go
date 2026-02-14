@@ -75,6 +75,11 @@ func IsAgentSessionKey(sessionKey string) bool {
 	return strings.HasPrefix(sessionKey, "agent:")
 }
 
+// IsSubagentSessionKey 检查是否为子 agent 会话 key（与 OpenClaw 一致：agent:<id>:subagent:<uuid>）
+func IsSubagentSessionKey(sessionKey string) bool {
+	return strings.Contains(sessionKey, ":subagent:")
+}
+
 // IsGroupSessionKey 检查是否为群组 session key
 func IsGroupSessionKey(sessionKey string) bool {
 	return strings.Contains(sessionKey, ":group:")

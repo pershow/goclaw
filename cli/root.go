@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/smallnest/goclaw/agent"
 	"github.com/smallnest/goclaw/agent/tools"
@@ -19,6 +20,7 @@ import (
 	"github.com/smallnest/goclaw/internal"
 	"github.com/smallnest/goclaw/internal/logger"
 	"github.com/smallnest/goclaw/internal/workspace"
+	"github.com/smallnest/goclaw/memory"
 	"github.com/smallnest/goclaw/providers"
 	"github.com/smallnest/goclaw/session"
 	"github.com/spf13/cobra"
@@ -142,8 +144,8 @@ func runStart(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// 初始化日志，同时写入 ~/.goclaw/logs/goclaw.log
-	logPath := filepath.Join(internal.GetGoclawDir(), "logs", "goclaw.log")
+	// 初始化日志，按日期写入 ~/.goclaw/logs/goclaw-2006-01-02.log
+	logPath := filepath.Join(internal.GetGoclawDir(), "logs", "goclaw-"+time.Now().Format("2006-01-02")+".log")
 	if err := logger.InitWithFile("info", false, logPath); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
 		os.Exit(1)
@@ -293,6 +295,23 @@ func runStart(cmd *cobra.Command, args []string) {
 		logger.Info("Browser tools registered")
 	}
 
+	// 内置记忆：启动时创建 store.db 并注册 memory 工具（backend 为 builtin 或默认时）
+	var memorySearchMgr memory.MemorySearchManager
+	if cfg.Memory.Backend == "builtin" || cfg.Memory.Backend == "" {
+		var errMem error
+		memorySearchMgr, errMem = memory.GetMemorySearchManager(cfg, workspaceDir)
+		if errMem != nil {
+			logger.Warn("Failed to init memory search manager (store.db will be created on first use)", zap.Error(errMem))
+		} else {
+			for _, t := range []tools.Tool{tools.NewMemoryTool(memorySearchMgr), tools.NewMemoryAddTool(memorySearchMgr)} {
+				if err := toolRegistry.RegisterExisting(t); err != nil {
+					logger.Warn("Failed to register memory tool", zap.String("tool", t.Name()), zap.Error(err))
+				}
+			}
+			logger.Info("Memory store ready", zap.String("db", filepath.Join(internal.GetMemoryDir(), "store.db")))
+		}
+	}
+
 	// 创建 LLM 提供商
 	provider, err := providers.NewProvider(cfg)
 	if err != nil {
@@ -390,6 +409,10 @@ func runStart(cmd *cobra.Command, args []string) {
 	// 停止 AgentManager
 	if err := agentManager.Stop(); err != nil {
 		logger.Error("Failed to stop agent manager", zap.Error(err))
+	}
+
+	if memorySearchMgr != nil {
+		_ = memorySearchMgr.Close()
 	}
 
 	logger.Info("goclaw agent stopped")

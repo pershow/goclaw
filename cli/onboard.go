@@ -31,6 +31,7 @@ var providerOptions = []struct {
 	{"openai", "OpenAI (GPT-4o, GPT-4o-mini, O1, ...)"},
 	{"anthropic", "Anthropic (Claude Sonnet/Opus, ...)"},
 	{"openrouter", "OpenRouter (多模型聚合)"},
+	{"9router", "9router (本地代理 / OpenAI 兼容)"},
 	{"kimi", "Kimi / 月之暗面 (Kimi K2.5, ...)"},
 }
 
@@ -51,6 +52,12 @@ var suggestedModelsByProvider = map[string][]string{
 		"deepseek/deepseek-chat",
 		"google/gemini-2.0-flash-001",
 		"meta-llama/llama-3.3-70b-instruct",
+	},
+	"9router": {
+		"gpt-4o",
+		"claude-3-5-sonnet-20241022",
+		"deepseek-chat",
+		"gpt-4o-mini",
 	},
 	"kimi": {
 		"kimi-k2.5", "kimi-k2-0905-preview", "kimi-k2-turbo-preview",
@@ -77,7 +84,7 @@ func init() {
 	onboardCmd.Flags().StringVarP(&onboardAPIKey, "api-key", "k", "", "API key for the provider (required in non-interactive mode)")
 	onboardCmd.Flags().StringVarP(&onboardBaseURL, "base-url", "u", "", "Base URL for the provider API")
 	onboardCmd.Flags().StringVarP(&onboardModel, "model", "m", "", "Model name to use")
-	onboardCmd.Flags().StringVarP(&onboardProvider, "provider", "p", "openai", "Provider: openai, anthropic, or openrouter")
+	onboardCmd.Flags().StringVarP(&onboardProvider, "provider", "p", "openai", "Provider: openai, anthropic, openrouter, 9router, or kimi")
 	onboardCmd.Flags().BoolVar(&onboardSkipPrompts, "skip-prompts", false, "Skip all prompts (use defaults)")
 	onboardCmd.Flags().BoolVar(&onboardReconfigure, "reconfigure", false, "Re-run API key and model setup even when config exists (like OpenClaw)")
 	onboardCmd.Flags().BoolVar(&onboardReset, "reset", false, "Full reset: remove config, sessions, and workspace, then run onboarding (like OpenClaw --reset)")
@@ -303,6 +310,14 @@ func nonInteractiveSetup(cfg *config.Config) error {
 		if onboardModel != "" {
 			cfg.Agents.Defaults.Model = onboardModel
 		}
+	case "9router":
+		cfg.Providers.Router9.APIKey = onboardAPIKey
+		if onboardBaseURL != "" {
+			cfg.Providers.Router9.BaseURL = onboardBaseURL
+		}
+		if onboardModel != "" {
+			cfg.Agents.Defaults.Model = onboardModel
+		}
 	case "kimi":
 		cfg.Providers.Moonshot.APIKey = onboardAPIKey
 		if onboardBaseURL != "" {
@@ -312,7 +327,7 @@ func nonInteractiveSetup(cfg *config.Config) error {
 			cfg.Agents.Defaults.Model = onboardModel
 		}
 	default:
-		return fmt.Errorf("invalid provider: %s (must be openai, anthropic, openrouter, or kimi)", provider)
+		return fmt.Errorf("invalid provider: %s (must be openai, anthropic, openrouter, 9router, or kimi)", provider)
 	}
 
 	fmt.Printf("  ✓ Provider configured: %s\n", provider)
@@ -328,6 +343,7 @@ func interactiveSetup(cfg *config.Config, fullFlow bool) error {
 	hasAPIKey := cfg.Providers.OpenAI.APIKey != "" ||
 		cfg.Providers.Anthropic.APIKey != "" ||
 		cfg.Providers.OpenRouter.APIKey != "" ||
+		cfg.Providers.Router9.APIKey != "" ||
 		cfg.Providers.Moonshot.APIKey != ""
 
 	if hasAPIKey {
@@ -363,6 +379,12 @@ func interactiveSetup(cfg *config.Config, fullFlow bool) error {
 			defaultBaseURL = cfg.Providers.OpenRouter.BaseURL
 		} else {
 			defaultBaseURL = "https://openrouter.ai/api/v1"
+		}
+	case "9router":
+		if cfg.Providers.Router9.BaseURL != "" {
+			defaultBaseURL = cfg.Providers.Router9.BaseURL
+		} else {
+			defaultBaseURL = "http://localhost:20128/v1"
 		}
 	case "kimi":
 		if cfg.Providers.Moonshot.BaseURL != "" {
@@ -403,12 +425,16 @@ func interactiveSetup(cfg *config.Config, fullFlow bool) error {
 		cfg.Providers.OpenRouter.APIKey = apiKey
 		cfg.Providers.OpenRouter.BaseURL = baseURL
 		cfg.Agents.Defaults.Model = model
+	case "9router":
+		cfg.Providers.Router9.APIKey = apiKey
+		cfg.Providers.Router9.BaseURL = baseURL
+		cfg.Agents.Defaults.Model = model
 	case "kimi":
 		cfg.Providers.Moonshot.APIKey = apiKey
 		cfg.Providers.Moonshot.BaseURL = baseURL
 		cfg.Agents.Defaults.Model = model
 	default:
-		return fmt.Errorf("invalid provider: %s (must be openai, anthropic, openrouter, or kimi)", provider)
+		return fmt.Errorf("invalid provider: %s (must be openai, anthropic, openrouter, 9router, or kimi)", provider)
 	}
 
 	if fullFlow {
@@ -433,6 +459,8 @@ func promptProviderChoice(cfg *config.Config) string {
 		defaultProvider = "anthropic"
 	} else if cfg.Providers.OpenRouter.APIKey != "" {
 		defaultProvider = "openrouter"
+	} else if cfg.Providers.Router9.APIKey != "" || cfg.Providers.Router9.BaseURL != "" {
+		defaultProvider = "9router"
 	} else if cfg.Providers.Moonshot.APIKey != "" {
 		defaultProvider = "kimi"
 	}
@@ -461,6 +489,8 @@ func promptProviderChoice(cfg *config.Config) string {
 		return "anthropic"
 	case "openrouter":
 		return "openrouter"
+	case "9router":
+		return "9router"
 	case "kimi", "moonshot":
 		return "kimi"
 	}
@@ -607,6 +637,8 @@ func getAPIKeyForProvider(cfg *config.Config, provider string) string {
 		return cfg.Providers.Anthropic.APIKey
 	case "openrouter":
 		return cfg.Providers.OpenRouter.APIKey
+	case "9router":
+		return cfg.Providers.Router9.APIKey
 	case "kimi":
 		return cfg.Providers.Moonshot.APIKey
 	}
@@ -674,6 +706,9 @@ func printSummary(cfg *config.Config) {
 	} else if cfg.Providers.OpenRouter.APIKey != "" {
 		providerName = "OpenRouter"
 		providerAPIKey = maskAPIKey(cfg.Providers.OpenRouter.APIKey)
+	} else if cfg.Providers.Router9.APIKey != "" || cfg.Providers.Router9.BaseURL != "" {
+		providerName = "9router"
+		providerAPIKey = maskAPIKey(cfg.Providers.Router9.APIKey)
 	} else if cfg.Providers.Moonshot.APIKey != "" {
 		providerName = "Kimi (Moonshot)"
 		providerAPIKey = maskAPIKey(cfg.Providers.Moonshot.APIKey)
