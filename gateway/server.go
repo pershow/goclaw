@@ -4,9 +4,12 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -165,6 +168,8 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// 启动出站消息广播（使用新的订阅机制）
 	go s.broadcastOutbound(ctx)
+	// 启动 Agent 事件广播（与 OpenClaw 一致：lifecycle/tool/assistant 供 UI 显示进度）
+	go s.broadcastAgentEvents(ctx)
 
 	// 监听上下文取消
 	go func() {
@@ -530,18 +535,30 @@ func (s *Server) handleWebSocketMessages(conn *Connection) {
 	defer func() {
 		conn.Close()
 		s.removeConnection(conn.ID)
-		logger.Info("WebSocket connection closed",
-			zap.String("connection_id", conn.ID),
-		)
+		// 关闭原因已在上方 err != nil 分支按 reason 打出，此处仅作连接移除后的兜底日志（无 reason）
+		logger.Debug("WebSocket connection removed", zap.String("connection_id", conn.ID))
 	}()
 
 	for {
 		messageType, data, err := conn.ReadMessage()
 		if err != nil {
+			reason := "unknown"
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				reason = "read_timeout_idle"
+			} else if op, ok := err.(*net.OpError); ok && op.Timeout() {
+				reason = "read_timeout"
+			} else if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+				reason = "client_close"
+			}
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-				logger.Error("WebSocket error",
+				logger.Info("WebSocket connection closed",
 					zap.String("connection_id", conn.ID),
+					zap.String("reason", reason),
 					zap.Error(err))
+			} else {
+				logger.Info("WebSocket connection closed",
+					zap.String("connection_id", conn.ID),
+					zap.String("reason", reason))
 			}
 			break
 		}
@@ -655,10 +672,13 @@ func (s *Server) broadcastOutbound(ctx context.Context) {
 			// 与 OpenClaw 一致：runId、sessionKey、seq、state、message（含 timestamp）；sessionKey 使用规范形式 agent:id:main 便于前端匹配
 			sessionKey := canonicalSessionKeyForBroadcast(msg.ChatID)
 
-			// 根据是否为流式消息设置 state
-			state := "final"
-			if msg.IsStream {
-				state = "delta" // 前端期望 "delta" 表示流式增量
+			// 根据 ChatState 或是否为流式消息设置 state（与 OpenClaw 一致：error/aborted 时前端可统一按 chat 结束收尾）
+			state := msg.ChatState
+			if state == "" {
+				state = "final"
+				if msg.IsStream {
+					state = "delta" // 前端期望 "delta" 表示流式增量
+				}
 			}
 
 			logger.Info("Broadcasting chat event to WebSocket",
@@ -699,6 +719,41 @@ func (s *Server) broadcastOutbound(ctx context.Context) {
 						zap.String("connection_id", conn.ID),
 						zap.Error(err))
 				}
+			}
+			s.connectionsMu.RUnlock()
+		}
+	}
+}
+
+// broadcastAgentEvents 订阅 Agent 事件并广播到所有 WebSocket（与 OpenClaw agent 事件格式一致，供 UI 显示进度与工具执行）
+func (s *Server) broadcastAgentEvents(ctx context.Context) {
+	sub := s.bus.SubscribeAgentEvent()
+	defer sub.Unsubscribe()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case payload, ok := <-sub.Channel:
+			if !ok {
+				return
+			}
+			if payload == nil {
+				continue
+			}
+			eventFrame := map[string]interface{}{
+				"type":    "event",
+				"event":  "agent",
+				"payload": payload,
+			}
+			notif, err := json.Marshal(eventFrame)
+			if err != nil {
+				logger.Error("Failed to marshal agent event", zap.Error(err))
+				continue
+			}
+			s.connectionsMu.RLock()
+			for _, conn := range s.connections {
+				_ = conn.SendMessage(websocket.TextMessage, notif)
 			}
 			s.connectionsMu.RUnlock()
 		}

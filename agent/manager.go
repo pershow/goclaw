@@ -11,8 +11,10 @@ import (
 	"github.com/smallnest/goclaw/bus"
 	"github.com/smallnest/goclaw/config"
 	"github.com/smallnest/goclaw/internal/logger"
+	"github.com/smallnest/goclaw/process"
 	"github.com/smallnest/goclaw/providers"
 	"github.com/smallnest/goclaw/session"
+	"github.com/smallnest/goclaw/types"
 	"go.uber.org/zap"
 )
 
@@ -77,7 +79,22 @@ func NewAgentManager(cfg *NewAgentManagerConfig) *AgentManager {
 	}
 }
 
-// handleSubagentCompletion 处理分身完成事件
+// readLatestAssistantReply 读取会话最后一条 assistant 消息内容（与 OpenClaw readLatestAssistantReply 对齐）
+func (m *AgentManager) readLatestAssistantReply(sessionKey string) string {
+	sess, err := m.sessionMgr.GetOrCreate(sessionKey)
+	if err != nil {
+		return ""
+	}
+	history := sess.GetHistory(-1)
+	for i := len(history) - 1; i >= 0; i-- {
+		if strings.ToLower(history[i].Role) == "assistant" {
+			return strings.TrimSpace(history[i].Content)
+		}
+	}
+	return ""
+}
+
+// handleSubagentCompletion 处理分身完成事件（与 OpenClaw 一致：读子会话最后回复作 Findings，cleanup=delete 时删除子会话）
 func (m *AgentManager) handleSubagentCompletion(runID string, record *SubagentRunRecord) {
 	logger.Info("Subagent completed",
 		zap.String("run_id", runID),
@@ -85,6 +102,7 @@ func (m *AgentManager) handleSubagentCompletion(runID string, record *SubagentRu
 
 	// 启动宣告流程
 	if record.Outcome != nil {
+		latestReply := m.readLatestAssistantReply(record.ChildSessionKey)
 		announceParams := &SubagentAnnounceParams{
 			ChildSessionKey:     record.ChildSessionKey,
 			ChildRunID:          record.RunID,
@@ -93,6 +111,7 @@ func (m *AgentManager) handleSubagentCompletion(runID string, record *SubagentRu
 			RequesterDisplayKey: record.RequesterDisplayKey,
 			Task:                record.Task,
 			Label:               record.Label,
+			LatestReply:         latestReply,
 			StartedAt:           record.StartedAt,
 			EndedAt:             record.EndedAt,
 			Outcome:             record.Outcome,
@@ -104,6 +123,16 @@ func (m *AgentManager) handleSubagentCompletion(runID string, record *SubagentRu
 			logger.Error("Failed to announce subagent result",
 				zap.String("run_id", runID),
 				zap.Error(err))
+		} else if record.Cleanup == "delete" {
+			// 与 OpenClaw 一致：宣告成功后若 cleanup=delete 则删除子会话（含 transcript）
+			if err := m.sessionMgr.Delete(record.ChildSessionKey); err != nil {
+				logger.Warn("Failed to delete subagent session after announce",
+					zap.String("child_session_key", record.ChildSessionKey),
+					zap.Error(err))
+			} else {
+				logger.Info("Subagent session deleted after announce",
+					zap.String("child_session_key", record.ChildSessionKey))
+			}
 		}
 
 		// 标记清理完成
@@ -121,7 +150,18 @@ func (m *AgentManager) SetupFromConfig(cfg *config.Config, contextBuilder *Conte
 
 	logger.Info("Setting up agents from config")
 
-	// 1. 创建 Agent 实例
+	// 1. 先注册所有工具（含 sessions_spawn、sessions_list 等），再创建 Agent，这样 createAgent 时 ListExisting() 已包含全部工具，主 agent 才能看到子 agent/会话工具
+	m.setupSubagentSupport(cfg, contextBuilder)
+	m.setupSessionTools()
+
+	// 与 OpenClaw 一致：子 agent 使用全局 lane "subagent"，并发数由配置控制
+	subagentConcurrent := 8
+	if cfg.Agents.Defaults.Subagents != nil && cfg.Agents.Defaults.Subagents.MaxConcurrent > 0 {
+		subagentConcurrent = cfg.Agents.Defaults.Subagents.MaxConcurrent
+	}
+	process.SetCommandLaneConcurrency(string(process.LaneSubagent), subagentConcurrent)
+
+	// 2. 创建 Agent 实例（此时 state.Tools 会包含上面已注册的 sessions_spawn、sessions_list 等）
 	for _, agentCfg := range cfg.Agents.List {
 		if err := m.createAgent(agentCfg, contextBuilder, cfg); err != nil {
 			logger.Error("Failed to create agent",
@@ -131,7 +171,7 @@ func (m *AgentManager) SetupFromConfig(cfg *config.Config, contextBuilder *Conte
 		}
 	}
 
-	// 2. 如果没有配置 Agent，创建默认 Agent
+	// 3. 如果没有配置 Agent，创建默认 Agent
 	if len(m.agents) == 0 {
 		logger.Info("No agents configured, creating default agent")
 		defaultAgentCfg := config.AgentConfig{
@@ -146,7 +186,7 @@ func (m *AgentManager) SetupFromConfig(cfg *config.Config, contextBuilder *Conte
 		}
 	}
 
-	// 3. 设置绑定
+	// 4. 设置绑定
 	for _, binding := range cfg.Bindings {
 		if err := m.setupBinding(binding); err != nil {
 			logger.Error("Failed to setup binding",
@@ -156,12 +196,6 @@ func (m *AgentManager) SetupFromConfig(cfg *config.Config, contextBuilder *Conte
 				zap.Error(err))
 		}
 	}
-
-	// 4. 设置分身支持
-	m.setupSubagentSupport(cfg, contextBuilder)
-
-	// 5. 注册会话类工具（sessions_list, sessions_history, sessions_send, session_status）
-	m.setupSessionTools()
 
 	logger.Info("Agent manager setup complete",
 		zap.Int("agents", len(m.agents)),
@@ -181,6 +215,9 @@ func (m *AgentManager) setupSubagentSupport(cfg *config.Config, contextBuilder *
 	m.subagentRegistry.SetOnRunComplete(func(runID string, record *SubagentRunRecord) {
 		m.handleSubagentCompletion(runID, record)
 	})
+
+	// 启动时恢复未收尾的子 agent（异常退出前已完成或未完成的 Run），与 OpenClaw initSubagentRegistry + restoreSubagentRunsOnce 对齐
+	m.subagentRegistry.RecoverAfterRestart()
 
 	// 更新宣告器回调
 	m.subagentAnnouncer = NewSubagentAnnouncer(func(sessionKey, message string) error {
@@ -280,21 +317,48 @@ func (a *subagentRegistryAdapter) RegisterRun(params *tools.SubagentRunParams) e
 	})
 }
 
-// handleSubagentSpawn 处理分身生成
+// handleSubagentSpawn 处理分身生成（与 OpenClaw 一致：通过 internal 入站走主 agent 同一套 session + lane + 执行路径）
 func (m *AgentManager) handleSubagentSpawn(result *tools.SubagentSpawnResult) error {
-	// 解析子会话密钥
-	_, subagentID, isSubagent := ParseAgentSessionKey(result.ChildSessionKey)
-	if !isSubagent {
+	if !session.IsSubagentSessionKey(result.ChildSessionKey) {
 		return fmt.Errorf("invalid subagent session key: %s", result.ChildSessionKey)
 	}
 
-	// TODO: 启动分身运行
-	// 这里需要创建新的 Agent 实例来运行分身任务
-	logger.Info("Subagent spawn handled",
-		zap.String("run_id", result.RunID),
-		zap.String("subagent_id", subagentID),
-		zap.String("child_session_key", result.ChildSessionKey))
+	record, ok := m.subagentRegistry.GetRun(result.RunID)
+	if !ok {
+		return fmt.Errorf("subagent run not found: %s", result.RunID)
+	}
 
+	logger.Info("Subagent spawn: publishing internal run",
+		zap.String("run_id", result.RunID),
+		zap.String("child_session_key", result.ChildSessionKey),
+		zap.String("task", record.Task))
+
+	// 与 OpenClaw 一致：先创建子会话并写入 label/spawnedBy，便于 sessions.list 前端展示
+	sess, err := m.sessionMgr.GetOrCreate(result.ChildSessionKey)
+	if err != nil {
+		return fmt.Errorf("get or create subagent session: %w", err)
+	}
+	updates := map[string]interface{}{"spawnedBy": record.RequesterSessionKey}
+	if record.Label != "" {
+		updates["label"] = record.Label
+	}
+	sess.PatchMetadata(updates)
+	if err := m.sessionMgr.Save(sess); err != nil {
+		return fmt.Errorf("save subagent session metadata: %w", err)
+	}
+
+	// 与 OpenClaw 一致：子 agent 通过 gateway "agent" 等价路径执行（sessionKey=childSessionKey, lane=subagent）
+	// 这里发布一条 internal 入站消息，由同一套 HandleInbound → GetOrCreate(session) → processMessageAsync(lane=subagent) → executeAgentRun 处理
+	internalMsg := &bus.InboundMessage{
+		ID:        result.RunID,
+		Channel:   "internal",
+		ChatID:    result.ChildSessionKey,
+		Content:   record.Task,
+		Timestamp: time.Now(),
+	}
+	if err := m.bus.PublishInbound(context.Background(), internalMsg); err != nil {
+		return fmt.Errorf("failed to publish subagent run: %w", err)
+	}
 	return nil
 }
 
@@ -314,11 +378,21 @@ func (m *AgentManager) sendToSession(sessionKey, message string) error {
 		return fmt.Errorf("no agent found for session: %s", sessionKey)
 	}
 
-	// TODO: 实现将消息发送到 Agent 的逻辑
-	// 这可能需要将消息注入到 Agent 的消息队列中
+	// 构建 AgentMessage
+	agentMsg := AgentMessage{
+		Role: RoleUser,
+		Content: []ContentBlock{
+			TextContent{Text: message},
+		},
+	}
+
+	// 注入为 steering 消息（中断当前运行）
+	// 如果 agent 正在运行，这会立即中断并处理新消息
+	agent.state.Steer(agentMsg)
 
 	logger.Info("Message sent to session",
 		zap.String("session_key", sessionKey),
+		zap.String("agent_id", agentID),
 		zap.Int("message_length", len(message)))
 
 	return nil
@@ -354,21 +428,22 @@ func (m *AgentManager) createAgent(cfg config.AgentConfig, contextBuilder *Conte
 
 	// 创建 Agent
 	agent, err := NewAgent(&NewAgentConfig{
-		ID:                   cfg.ID, // 传递 agent ID
-		Bus:                  m.bus,
-		Provider:             m.provider,
-		SessionMgr:           m.sessionMgr,
-		Tools:                m.tools,
-		Context:              contextBuilder,
-		Model:                model,
-		Workspace:            workspace,
-		MaxIteration:         maxIterations,
-		Temperature:          temperature,
-		MaxTokens:            maxTokens,
-		ContextWindowTokens:  ctxTokens,
-		ReserveTokens:        reserveTokens,
-		MaxHistoryTurns:      maxHistoryTurns,
-		SkillsLoader:         m.skillsLoader,
+		ID:                          cfg.ID, // 传递 agent ID
+		Bus:                         m.bus,
+		Provider:                    m.provider,
+		SessionMgr:                  m.sessionMgr,
+		Tools:                       m.tools,
+		Context:                     contextBuilder,
+		Model:                       model,
+		Workspace:                   workspace,
+		MaxIteration:                maxIterations,
+		Temperature:                 temperature,
+		MaxTokens:                   maxTokens,
+		ContextWindowTokens:         ctxTokens,
+		ReserveTokens:                reserveTokens,
+		MaxHistoryTurns:             maxHistoryTurns,
+		ModelRequestIntervalSeconds: globalCfg.Agents.Defaults.ModelRequestIntervalSeconds,
+		SkillsLoader:                m.skillsLoader,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create agent %s: %w", cfg.ID, err)
@@ -428,19 +503,39 @@ func (m *AgentManager) RouteInbound(ctx context.Context, msg *bus.InboundMessage
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	var agent *Agent
+
+	// 与 OpenClaw 一致：internal channel 为子 agent 触发，sessionKey=ChatID，agent 从 sessionKey 解析
+	if msg.Channel == "internal" {
+		agentID, _, ok := ParseAgentSessionKey(msg.ChatID)
+		if !ok {
+			return fmt.Errorf("invalid internal session key: %s", msg.ChatID)
+		}
+		if a, ok := m.GetAgent(agentID); ok {
+			agent = a
+		} else {
+			agent = m.defaultAgent
+		}
+		if agent == nil {
+			return fmt.Errorf("no agent for internal run: %s", agentID)
+		}
+		logger.Debug("Internal (subagent) message routed by session key",
+			zap.String("chat_id", msg.ChatID),
+			zap.String("agent_id", agentID))
+		return m.handleInboundMessage(ctx, msg, agent)
+	}
+
 	// 构建绑定键
 	bindingKey := fmt.Sprintf("%s:%s", msg.Channel, msg.AccountID)
 
 	// 查找绑定的 Agent
 	entry, ok := m.bindings[bindingKey]
-	var agent *Agent
 	if ok {
 		agent = entry.Agent
 		logger.Debug("Message routed by binding",
 			zap.String("binding_key", bindingKey),
 			zap.String("agent_id", entry.AgentID))
 	} else if m.defaultAgent != nil {
-		// 使用默认 Agent
 		agent = m.defaultAgent
 		logger.Debug("Message routed to default agent",
 			zap.String("channel", msg.Channel),
@@ -449,7 +544,6 @@ func (m *AgentManager) RouteInbound(ctx context.Context, msg *bus.InboundMessage
 		return fmt.Errorf("no agent found for message: %s", bindingKey)
 	}
 
-	// 处理消息
 	return m.handleInboundMessage(ctx, msg, agent)
 }
 
@@ -475,7 +569,11 @@ func (m *AgentManager) handleInboundMessage(ctx context.Context, msg *bus.Inboun
 
 	// 生成会话键（与 OpenClaw 对齐：所有 session key 都以 agent:<agentId>: 开头）
 	var sessionKey string
-	if msg.Channel == "websocket" {
+	if msg.Channel == "internal" {
+		// 子 agent：ChatID 即为 childSessionKey（agent:<id>:subagent:<uuid>）
+		sessionKey = msg.ChatID
+		logger.Info("Using child session for subagent", zap.String("session_key", sessionKey))
+	} else if msg.Channel == "websocket" {
 		// Web 控制台：
 		// - 如果 chatID 已经是 agent:xxx:xxx 格式，直接使用
 		// - 否则使用主会话 key
@@ -524,16 +622,27 @@ func (m *AgentManager) handleInboundMessage(ctx context.Context, msg *bus.Inboun
 		}
 	}
 
-	// 获取 Agent 的 orchestrator
-	orchestrator := agent.GetOrchestrator()
+	// 为本次 Run 创建独立 Orchestrator，避免多 agent/多会话共用同一 eventChan 导致流式事件串台
+	orchestrator := agent.CreateOrchestratorForRun(sessionKey)
 
-	// 加载历史消息并构造发给 orchestrator 的列表
-	// Web 控制台：Gateway 已在 session 中写入当前用户消息，此处仅用历史即可，避免重复一条 user
-	// 其他渠道：历史中可能不包含当前这条，需要追加 agentMsg
+	// 加载历史消息并构造发给 orchestrator 的列表（与 OpenClaw 一致）
+	// internal（子 agent）：先写入当前用户消息再读历史，与主 agent 同一套 session 流程
+	if msg.Channel == "internal" {
+		sessMsg := session.Message{
+			Role:      "user",
+			Content:   msg.Content,
+			Timestamp: time.Now(),
+		}
+		sess.AddMessage(sessMsg)
+		if err := m.sessionMgr.Save(sess); err != nil {
+			logger.Error("Failed to save subagent session", zap.Error(err))
+			return err
+		}
+	}
 	history := sess.GetHistory(-1) // -1 表示加载所有历史消息
 	historyAgentMsgs := sessionMessagesToAgentMessages(history)
 	var allMessages []AgentMessage
-	if msg.Channel == "websocket" {
+	if msg.Channel == "websocket" || msg.Channel == "internal" {
 		allMessages = historyAgentMsgs
 	} else {
 		allMessages = append(historyAgentMsgs, agentMsg)
@@ -544,17 +653,103 @@ func (m *AgentManager) handleInboundMessage(ctx context.Context, msg *bus.Inboun
 		zap.Int("history_count", len(history)),
 		zap.Int("all_messages_count", len(allMessages)))
 
-	// 订阅事件以支持流式输出
+	// 异步处理消息，避免阻塞主 agent 接收新消息
+	go m.processMessageAsync(ctx, msg, agent, orchestrator, allMessages, sessionKey, agentMsg, sess, len(history))
+
+	return nil
+}
+
+// processMessageAsync 异步处理消息，避免阻塞主 agent
+// 使用 lane-based 队列：子 agent 用全局 lane "subagent"（与 OpenClaw CommandLane.Subagent 一致），主 agent 用 session lane
+func (m *AgentManager) processMessageAsync(ctx context.Context, msg *bus.InboundMessage, agent *Agent, orchestrator *Orchestrator, allMessages []AgentMessage, sessionKey string, agentMsg AgentMessage, sess *session.Session, historyLen int) {
+	lane := fmt.Sprintf("session:%s", sessionKey)
+	if session.IsSubagentSessionKey(sessionKey) {
+		lane = string(process.LaneSubagent)
+	}
+
+	// 单次 Run 超时：模型 API 断开或不可达时不会无限卡住，超时后 ctx 取消、返回错误给用户（continueExecuteAgentRun 会发 phase: error）
+	runCtx := ctx
+	if cfg := config.Get(); cfg != nil && cfg.Agents.Defaults.RunTimeoutSeconds > 0 {
+		runCtx, _ = context.WithTimeout(ctx, time.Duration(cfg.Agents.Defaults.RunTimeoutSeconds)*time.Second)
+	}
+
+	go func() {
+		_, err := process.EnqueueCommandInLane(ctx, lane, func(laneCtx context.Context) (interface{}, error) {
+			return m.executeAgentRun(runCtx, msg, agent, orchestrator, allMessages, sessionKey, agentMsg, sess, historyLen)
+		}, nil)
+		if err != nil {
+			logger.Error("Failed to execute agent run in lane",
+				zap.String("lane", lane),
+				zap.String("session_key", sessionKey),
+				zap.Error(err))
+		}
+	}()
+}
+
+// buildRunOptionsForSession 子 agent 会话时返回 agents.defaults.subagents 的 model/max_iterations 覆盖，主会话返回 nil。
+// 子 agent 使用的 model 与配置 agents.defaults.subagents.model 完全一致（仅 TrimSpace），不修改格式。
+func (m *AgentManager) buildRunOptionsForSession(sessionKey string) *RunOptions {
+	if !session.IsSubagentSessionKey(sessionKey) {
+		return nil
+	}
+	cfg := config.Get()
+	if cfg == nil || cfg.Agents.Defaults.Subagents == nil {
+		logger.Debug("Subagent run: no subagents config, using agent default model")
+		return nil
+	}
+	s := cfg.Agents.Defaults.Subagents
+	model := strings.TrimSpace(s.Model) // 与配置一致，仅去首尾空格
+	maxIter := 15
+	// 子 agent 可用独立 model；若配置了 timeout_seconds 可适当提高迭代上限（按每轮约 30s 粗算）
+	if s.TimeoutSeconds > 0 && s.TimeoutSeconds > 60 {
+		if n := s.TimeoutSeconds / 30; n > maxIter {
+			maxIter = n
+		}
+	}
+	if model == "" {
+		logger.Info("Subagent run options: no model override (subagents.model empty), using agent default",
+			zap.String("session_key", sessionKey),
+			zap.Int("max_iterations", maxIter))
+		return &RunOptions{MaxIterations: maxIter}
+	}
+	logger.Info("Subagent run options: using model from agents.defaults.subagents.model",
+		zap.String("session_key", sessionKey),
+		zap.String("model", model),
+		zap.Int("max_iterations", maxIter))
+	return &RunOptions{Model: model, MaxIterations: maxIter}
+}
+
+// emitAgentEvent 向总线发送 Agent 事件（与 OpenClaw emitAgentEvent 对齐），供 Control UI 显示进度
+func (m *AgentManager) emitAgentEvent(ctx context.Context, runId, sessionKey string, seq *int, stream bus.AgentEventStream, data map[string]interface{}) {
+	*seq++
+	payload := &bus.AgentEventPayload{
+		RunId:      runId,
+		Seq:        *seq,
+		Stream:     stream,
+		Ts:         time.Now().UnixMilli(),
+		Data:       data,
+		SessionKey: sessionKey,
+	}
+	_ = m.bus.PublishAgentEvent(ctx, payload)
+}
+
+// executeAgentRun 执行 agent 运行（在 lane 中串行执行）
+func (m *AgentManager) executeAgentRun(ctx context.Context, msg *bus.InboundMessage, agent *Agent, orchestrator *Orchestrator, allMessages []AgentMessage, sessionKey string, agentMsg AgentMessage, sess *session.Session, historyLen int) (interface{}, error) {
+	runId := msg.ID
+	seq := 0
+
+	// 与 OpenClaw 一致：先发送 lifecycle start，UI 可显示“运行中”
+	m.emitAgentEvent(ctx, runId, sessionKey, &seq, bus.AgentStreamLifecycle, map[string]interface{}{
+		"phase": "start",
+	})
+
 	eventChan := orchestrator.Subscribe()
-
-	// 创建用于控制事件处理的 context
 	eventCtx, eventCancel := context.WithCancel(ctx)
-
-	// 启动事件处理 goroutine，累积流式内容
 	streamDone := make(chan struct{})
+	var accumulated strings.Builder
+
 	go func() {
 		defer close(streamDone)
-		var accumulated strings.Builder // 累积流式内容
 		for {
 			select {
 			case <-eventCtx.Done():
@@ -564,27 +759,82 @@ func (m *AgentManager) handleInboundMessage(ctx context.Context, msg *bus.Inboun
 					return
 				}
 				if event.Type == EventMessageDelta && event.Content != "" {
-					// 累积内容
 					accumulated.WriteString(event.Content)
-					// 发送累积的完整内容到 bus（前端期望 delta 事件包含累积内容）
 					m.publishStreamDelta(ctx, msg.Channel, msg.ChatID, msg.ID, accumulated.String())
+					// 与 OpenClaw 一致：assistant 流式增量也发 agent 事件
+					m.emitAgentEvent(ctx, runId, sessionKey, &seq, bus.AgentStreamAssistant, map[string]interface{}{
+						"text": accumulated.String(),
+					})
+				}
+				if event.Type == EventToolExecutionStart {
+					// 与 Control UI app-tool-stream 对齐：toolCallId, name, phase, args
+					m.emitAgentEvent(ctx, runId, sessionKey, &seq, bus.AgentStreamTool, map[string]interface{}{
+						"toolCallId": event.ToolID,
+						"name":       event.ToolName,
+						"phase":      "start",
+						"args":       event.ToolArgs,
+					})
+				}
+				if event.Type == EventToolExecutionEnd {
+					resultText := ""
+					if event.ToolResult != nil {
+						resultText = extractToolResultContent(event.ToolResult.Content)
+					}
+					// UI 用 phase "result" 显示工具输出
+					m.emitAgentEvent(ctx, runId, sessionKey, &seq, bus.AgentStreamTool, map[string]interface{}{
+						"toolCallId": event.ToolID,
+						"name":       event.ToolName,
+						"phase":      "result",
+						"error":      event.ToolError,
+						"result":     resultText,
+					})
 				}
 			}
 		}
 	}()
 
-	// 执行 Agent
-	finalMessages, err := orchestrator.Run(ctx, allMessages)
+	runOpts := m.buildRunOptionsForSession(sessionKey)
+	finalMessages, err := orchestrator.Run(ctx, allMessages, runOpts)
 
-	// 停止事件处理
 	eventCancel()
 	<-streamDone
 
+	// 与 OpenClaw 一致：发送 lifecycle end 或 error，UI 可显示完成/错误
+	if err != nil {
+		m.emitAgentEvent(ctx, runId, sessionKey, &seq, bus.AgentStreamLifecycle, map[string]interface{}{
+			"phase": "error",
+			"error": err.Error(),
+		})
+	} else {
+		m.emitAgentEvent(ctx, runId, sessionKey, &seq, bus.AgentStreamLifecycle, map[string]interface{}{
+			"phase": "end",
+		})
+	}
+
+	m.continueExecuteAgentRun(ctx, msg, sessionKey, sess, historyLen, finalMessages, agentMsg, err)
+
+	if err != nil {
+		return nil, err
+	}
+	return finalMessages, nil
+}
+
+// continueExecuteAgentRun 继续执行 agent 运行的后续处理
+func (m *AgentManager) continueExecuteAgentRun(ctx context.Context, msg *bus.InboundMessage, sessionKey string, sess *session.Session, historyLen int, finalMessages []AgentMessage, agentMsg AgentMessage, err error) {
 	logger.Info("orchestrator.Run returned",
 		zap.String("session_key", sessionKey),
 		zap.Int("final_messages_count", len(finalMessages)),
 		zap.Error(err))
+
 	if err != nil {
+		// 子 agent 失败时也标记完成，由回调统一 announcer + cleanup
+		if session.IsSubagentSessionKey(sessionKey) {
+			if _, ok := m.subagentRegistry.GetRun(msg.ID); ok {
+				endedAt := time.Now().UnixMilli()
+				_ = m.subagentRegistry.MarkCompleted(msg.ID, &SubagentRunOutcome{Status: "error", Error: err.Error()}, &endedAt)
+			}
+			return
+		}
 		// Check if error is related to historical message incompatibility (old session format)
 		errStr := err.Error()
 		hasToolCallIDMismatch := strings.Contains(errStr, "tool_call_id") && strings.Contains(errStr, "mismatch")
@@ -596,48 +846,86 @@ func (m *AgentManager) handleInboundMessage(ctx context.Context, msg *bus.Inboun
 			// Clear old session and retry
 			if delErr := m.sessionMgr.Delete(sessionKey); delErr != nil {
 				logger.Error("Failed to clear old session", zap.Error(delErr))
-			} else {
-				logger.Info("Cleared old session, retrying with fresh session")
-				// Get fresh session
-				sess, getErr := m.sessionMgr.GetOrCreate(sessionKey)
-				if getErr != nil {
-					logger.Error("Failed to create fresh session", zap.Error(getErr))
-					return getErr
-				}
-				// Retry with fresh session (no history)
-				finalMessages, retryErr := orchestrator.Run(ctx, []AgentMessage{agentMsg})
-				if retryErr != nil {
-					logger.Error("Agent execution failed on retry", zap.Error(retryErr))
-					return retryErr
-				}
-				// Update session with new messages
-				m.updateSession(sess, finalMessages, 0)
-				// Publish response
-				if len(finalMessages) > 0 {
-					lastMsg := finalMessages[len(finalMessages)-1]
-					if lastMsg.Role == RoleAssistant {
-						m.publishToBus(ctx, msg.Channel, msg.ChatID, msg.ID, lastMsg)
-					}
-				}
-				return nil
+				return
 			}
+			logger.Info("Cleared old session, retrying with fresh session")
+			// Get fresh session
+			freshSess, getErr := m.sessionMgr.GetOrCreate(sessionKey)
+			if getErr != nil {
+				logger.Error("Failed to create fresh session", zap.Error(getErr))
+				return
+			}
+
+			// Get agent from session key
+			agentID, _, _ := ParseAgentSessionKey(sessionKey)
+			agent, ok := m.GetAgent(agentID)
+			if !ok {
+				agent = m.defaultAgent
+			}
+			if agent == nil {
+				logger.Error("No agent found for retry")
+				return
+			}
+
+			// Retry with fresh session (no history)
+			finalMessages, retryErr := agent.GetOrchestrator().Run(ctx, []AgentMessage{agentMsg}, nil)
+			if retryErr != nil {
+				logger.Error("Agent execution failed on retry", zap.Error(retryErr))
+				m.publishRunErrorToBus(ctx, msg.Channel, msg.ChatID, msg.ID, retryErr)
+				return
+			}
+			// Update session with new messages
+			m.updateSession(freshSess, finalMessages, 0)
+			// Publish response
+			if len(finalMessages) > 0 {
+				lastMsg := finalMessages[len(finalMessages)-1]
+				if lastMsg.Role == RoleAssistant {
+					m.publishToBus(ctx, msg.Channel, msg.ChatID, msg.ID, lastMsg)
+				}
+			}
+			return
 		}
 		logger.Error("Agent execution failed", zap.Error(err))
-		return err
+		m.publishRunErrorToBus(ctx, msg.Channel, msg.ChatID, msg.ID, err)
+		return
 	}
 
 	// 更新会话（只保存新产生的消息）并在发布前完成 Save，保证 chat.history 能读到助手回复
-	m.updateSession(sess, finalMessages, len(history))
+	m.updateSession(sess, finalMessages, historyLen)
 
-	// 发布响应（Save 已在 updateSession 内完成，前端收到 event 后拉 chat.history 可拿到完整会话）
-	if len(finalMessages) > 0 {
+	// 发布响应（Save 已在 updateSession 内完成）；子 agent（internal）不推 bus，结果通过 announcer 回主会话
+	if msg.Channel != "internal" && len(finalMessages) > 0 {
 		lastMsg := finalMessages[len(finalMessages)-1]
 		if lastMsg.Role == RoleAssistant {
-			m.publishToBus(ctx, msg.Channel, msg.ChatID, msg.ID, lastMsg)
+			content := extractTextContent(lastMsg)
+			if strings.TrimSpace(content) != "" {
+				m.publishToBus(ctx, msg.Channel, msg.ChatID, msg.ID, lastMsg)
+			} else {
+				// LLM 返回空回复时也要发 state: "final"，否则前端收不到结束事件会一直转圈
+				m.publishRunFinalToBus(ctx, msg.Channel, msg.ChatID, msg.ID, "")
+			}
 		}
 	}
 
-	return nil
+	// 子 agent 完成后标记完成，由 SetOnRunComplete 回调（handleSubagentCompletion）统一做 announcer + cleanup
+	if session.IsSubagentSessionKey(sessionKey) {
+		if _, ok := m.subagentRegistry.GetRun(msg.ID); ok {
+			outcome := &SubagentRunOutcome{Status: "success"}
+			if len(finalMessages) > 0 {
+				for i := len(finalMessages) - 1; i >= 0; i-- {
+					if finalMessages[i].Role == RoleAssistant {
+						t := extractTextContent(finalMessages[i])
+						if t != "" {
+							outcome.Artifacts = []Artifact{{Type: "text", Payload: t}}
+						}
+						break
+					}
+				}
+			}
+			endedAt := time.Now().UnixMilli()
+			_ = m.subagentRegistry.MarkCompleted(msg.ID, outcome, &endedAt)
+		}
+	}
 }
 
 // updateSession 更新会话
@@ -694,9 +982,67 @@ func (m *AgentManager) updateSession(sess *session.Session, messages []AgentMess
 	}
 }
 
+// friendlyRunErrorMessage 将限流/406 等错误转为对用户友好的中文提示，其余错误返回原始文案
+func friendlyRunErrorMessage(runErr error) string {
+	if runErr == nil {
+		return ""
+	}
+	classifier := types.NewSimpleErrorClassifier()
+	if classifier.ClassifyError(runErr) == types.FailoverReasonRateLimit {
+		delaySec := types.ExtractRateLimitDelay(runErr, 30, 60)
+		if delaySec > 0 {
+			return fmt.Sprintf("请求过于频繁或模型暂时限流，请 %d 秒后再试。", delaySec)
+		}
+		return "请求过于频繁或模型暂时限流，请稍后再试。"
+	}
+	return runErr.Error()
+}
+
+// publishRunErrorToBus 在 Run 报错（如超时、模型 API 断开）时发布一条 chat 事件 state: "error"，便于前端按 chat 结束统一收尾（与 OpenClaw 的 aborted 一致）
+func (m *AgentManager) publishRunErrorToBus(ctx context.Context, channel, chatID, runID string, runErr error) {
+	if runErr == nil {
+		return
+	}
+	content := friendlyRunErrorMessage(runErr)
+	outbound := &bus.OutboundMessage{
+		ID:        runID,
+		Channel:   channel,
+		ChatID:    chatID,
+		Content:   content,
+		ChatState: "error",
+		Timestamp: time.Now(),
+	}
+	if err := m.bus.PublishOutbound(ctx, outbound); err != nil {
+		logger.Error("Failed to publish run error to outbound", zap.Error(err))
+	}
+}
+
+// publishRunFinalToBus 在 Run 正常结束但内容为空时发送 state: "final"，让前端能结束当前 run
+func (m *AgentManager) publishRunFinalToBus(ctx context.Context, channel, chatID, runID, content string) {
+	outbound := &bus.OutboundMessage{
+		ID:        runID,
+		Channel:   channel,
+		ChatID:    chatID,
+		Content:   content,
+		ChatState: "final",
+		Timestamp: time.Now(),
+	}
+	if err := m.bus.PublishOutbound(ctx, outbound); err != nil {
+		logger.Error("Failed to publish run final to outbound", zap.Error(err))
+	}
+}
+
 // publishToBus 发布消息到总线
 func (m *AgentManager) publishToBus(ctx context.Context, channel, chatID, runID string, msg AgentMessage) {
 	content := extractTextContent(msg)
+
+	// 如果内容为空（只有工具调用，没有文本），不发布消息
+	if strings.TrimSpace(content) == "" {
+		logger.Debug("Skipping empty message publish (tool-only response)",
+			zap.String("run_id", runID),
+			zap.String("role", string(msg.Role)))
+		return
+	}
 
 	outbound := &bus.OutboundMessage{
 		ID:        runID, // 保留原始 runId，确保前端能匹配
@@ -891,4 +1237,160 @@ func (m *AgentManager) GetToolsInfo() (map[string]interface{}, error) {
 	}
 
 	return result, nil
+}
+
+// getOrCreateSubagent 获取或创建子 agent
+func (m *AgentManager) getOrCreateSubagent(parentAgentID, subagentID string, parentAgent *Agent) (*Agent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 构建子 agent ID
+	fullSubagentID := fmt.Sprintf("%s:subagent:%s", parentAgentID, subagentID)
+
+	// 检查是否已存在
+	if subagent, ok := m.agents[fullSubagentID]; ok {
+		return subagent, nil
+	}
+
+	// 创建新的子 agent（复用父 agent 的配置）
+	parentState := parentAgent.GetState()
+
+	subagent, err := NewAgent(&NewAgentConfig{
+		ID:                          fullSubagentID,
+		Bus:                         m.bus,
+		Provider:                    m.provider,
+		SessionMgr:                  m.sessionMgr,
+		Tools:                       m.tools,
+		Context:                     m.contextBuilder,
+		Model:                       parentState.Model,
+		Workspace:                   parentAgent.workspace,
+		MaxIteration:                15, // 子 agent 使用默认迭代次数
+		Temperature:                 0,  // 使用 provider 默认
+		MaxTokens:                   0,  // 使用 provider 默认
+		ContextWindowTokens:        0,  // 使用默认
+		ReserveTokens:               0,  // 使用默认
+		MaxHistoryTurns:             0,  // 不限制
+		ModelRequestIntervalSeconds: m.cfg.Agents.Defaults.ModelRequestIntervalSeconds,
+		SkillsLoader:                m.skillsLoader,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create subagent: %w", err)
+	}
+
+	// 存储子 agent
+	m.agents[fullSubagentID] = subagent
+
+	logger.Info("Subagent created",
+		zap.String("subagent_id", fullSubagentID),
+		zap.String("parent_agent_id", parentAgentID))
+
+	return subagent, nil
+}
+
+// runSubagent 在后台运行子 agent
+func (m *AgentManager) runSubagent(subagent *Agent, runID, sessionKey, task string) {
+	ctx := context.Background()
+
+	logger.Info("Starting subagent execution",
+		zap.String("run_id", runID),
+		zap.String("session_key", sessionKey),
+		zap.String("task", task))
+
+	// 构建任务消息
+	taskMsg := AgentMessage{
+		Role: RoleUser,
+		Content: []ContentBlock{
+			TextContent{Text: task},
+		},
+	}
+
+	// 更新 agent 的 session key
+	subagent.state.SessionKey = sessionKey
+
+	// 运行 orchestrator
+	startTime := time.Now()
+	finalMessages, err := subagent.GetOrchestrator().Run(ctx, []AgentMessage{taskMsg}, nil)
+
+	endTime := time.Now()
+	endedAt := endTime.UnixMilli()
+
+	// 构建结果
+	outcome := &SubagentRunOutcome{
+		Status: "success",
+	}
+
+	if err != nil {
+		outcome.Status = "error"
+		outcome.Error = err.Error()
+		logger.Error("Subagent execution failed",
+			zap.String("run_id", runID),
+			zap.Error(err))
+	} else {
+		// 提取最后的 assistant 消息作为结果
+		for i := len(finalMessages) - 1; i >= 0; i-- {
+			if finalMessages[i].Role == RoleAssistant {
+				// 提取文本内容
+				var textParts []string
+				for _, content := range finalMessages[i].Content {
+					if tc, ok := content.(TextContent); ok {
+						textParts = append(textParts, tc.Text)
+					}
+				}
+				// 将结果存储为 artifact
+				resultText := strings.Join(textParts, "\n")
+				if resultText != "" {
+					outcome.Artifacts = []Artifact{
+						{
+							Type:    "text",
+							Payload: resultText,
+						},
+					}
+				}
+				break
+			}
+		}
+
+		logger.Info("Subagent execution completed",
+			zap.String("run_id", runID),
+			zap.Duration("duration", endTime.Sub(startTime)))
+	}
+
+	// 标记完成
+	if err := m.subagentRegistry.MarkCompleted(runID, outcome, &endedAt); err != nil {
+		logger.Error("Failed to mark subagent completed",
+			zap.String("run_id", runID),
+			zap.Error(err))
+	}
+
+	// 获取子 agent 运行记录
+	record, ok := m.subagentRegistry.GetRun(runID)
+	if !ok {
+		logger.Error("Failed to get subagent run record for announcement",
+			zap.String("run_id", runID))
+		return
+	}
+
+	// 发送 announcement 到主 agent
+	announcer := NewSubagentAnnouncer(m.sendToSession)
+	startedAtMs := startTime.UnixMilli()
+	announceParams := &SubagentAnnounceParams{
+		ChildSessionKey:     sessionKey,
+		ChildRunID:          runID,
+		RequesterSessionKey: record.RequesterSessionKey,
+		RequesterOrigin:     record.RequesterOrigin,
+		RequesterDisplayKey: record.RequesterDisplayKey,
+		Task:                record.Task,
+		Label:               record.Label,
+		StartedAt:           &startedAtMs,
+		EndedAt:             &endedAt,
+		Outcome:             outcome,
+		Cleanup:             record.Cleanup,
+		AnnounceType:        SubagentAnnounceTypeTask,
+	}
+
+	if err := announcer.RunAnnounceFlow(announceParams); err != nil {
+		logger.Error("Failed to announce subagent result",
+			zap.String("run_id", runID),
+			zap.Error(err))
+	}
 }

@@ -4,34 +4,49 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/smallnest/goclaw/internal/logger"
 	"github.com/smallnest/goclaw/providers"
+	"github.com/smallnest/goclaw/types"
 	"go.uber.org/zap"
 )
+
+// RunOptions 单次运行的可选覆盖（如子 agent 使用 agents.defaults.subagents 的 model/max_iterations）
+type RunOptions struct {
+	Model          string // 覆盖本次调用的模型，空表示用 config.Model
+	MaxIterations  int    // 覆盖本次最大迭代数，<=0 表示用 config.MaxIterations
+}
 
 // Orchestrator manages the agent execution loop
 // Based on pi-mono's agent-loop.ts design
 type Orchestrator struct {
-	config     *LoopConfig
-	state      *AgentState
-	eventChan  chan *Event
-	cancelFunc context.CancelFunc
+	config          *LoopConfig
+	state           *AgentState
+	eventChan       chan *Event
+	cancelFunc      context.CancelFunc
+	progressTracker *ProgressTracker
+	runOpts         *RunOptions   // 本次 Run 的覆盖，仅 Run 内有效
+	lastLLMCallTime time.Time     // 上次调用 LLM 的时间，用于 model_request_interval 间隔
 }
 
 // NewOrchestrator creates a new agent orchestrator
 func NewOrchestrator(config *LoopConfig, initialState *AgentState) *Orchestrator {
 	// 事件通道缓冲需足够大，避免流式输出时消费者稍慢导致 orchestrator 阻塞
 	return &Orchestrator{
-		config:    config,
-		state:     initialState,
-		eventChan: make(chan *Event, 512),
+		config:          config,
+		state:           initialState,
+		eventChan:       make(chan *Event, 512),
+		progressTracker: NewProgressTracker(initialState.SessionKey),
 	}
 }
 
-// Run starts the agent loop with initial prompts
-func (o *Orchestrator) Run(ctx context.Context, prompts []AgentMessage) ([]AgentMessage, error) {
+// Run starts the agent loop with initial prompts. opts is optional (e.g. subagent run uses subagents model/max_iterations).
+func (o *Orchestrator) Run(ctx context.Context, prompts []AgentMessage, opts *RunOptions) ([]AgentMessage, error) {
+	o.runOpts = opts
+	defer func() { o.runOpts = nil }()
+
 	logger.Info("=== Orchestrator Run Start ===",
 		zap.Int("prompts_count", len(prompts)))
 
@@ -44,6 +59,10 @@ func (o *Orchestrator) Run(ctx context.Context, prompts []AgentMessage) ([]Agent
 	currentState := o.state.Clone()
 	currentState.AddMessages(newMessages)
 
+	// Start progress tracking（子 agent 可通过 opts.MaxIterations 覆盖）
+	maxIter := o.effectiveMaxIterations()
+	o.progressTracker.Start(maxIter)
+
 	// Emit start event
 	o.emit(NewEvent(EventAgentStart))
 
@@ -53,6 +72,13 @@ func (o *Orchestrator) Run(ctx context.Context, prompts []AgentMessage) ([]Agent
 	logger.Info("=== Orchestrator Run End ===",
 		zap.Int("final_messages_count", len(finalMessages)),
 		zap.Error(err))
+
+	// Update progress tracking
+	if err != nil {
+		o.progressTracker.Error(err)
+	} else {
+		o.progressTracker.Complete()
+	}
 
 	// Emit end event
 	endEvent := NewEvent(EventAgentEnd)
@@ -69,6 +95,26 @@ func (o *Orchestrator) Run(ctx context.Context, prompts []AgentMessage) ([]Agent
 	return finalMessages, nil
 }
 
+// effectiveMaxIterations 返回本次运行的有效最大迭代数（含 RunOptions 覆盖）
+func (o *Orchestrator) effectiveMaxIterations() int {
+	if o.runOpts != nil && o.runOpts.MaxIterations > 0 {
+		return o.runOpts.MaxIterations
+	}
+	maxIter := o.config.MaxIterations
+	if maxIter <= 0 {
+		return 15
+	}
+	return maxIter
+}
+
+// effectiveModel 返回本次运行的有效模型（子 agent 可通过 RunOptions.Model 覆盖）
+func (o *Orchestrator) effectiveModel() string {
+	if o.runOpts != nil && strings.TrimSpace(o.runOpts.Model) != "" {
+		return strings.TrimSpace(o.runOpts.Model)
+	}
+	return strings.TrimSpace(o.config.Model)
+}
+
 // runLoop implements the main agent loop logic
 func (o *Orchestrator) runLoop(ctx context.Context, state *AgentState) ([]AgentMessage, error) {
 	firstTurn := true
@@ -76,10 +122,7 @@ func (o *Orchestrator) runLoop(ctx context.Context, state *AgentState) ([]AgentM
 	// Check for steering messages at start
 	pendingMessages := o.fetchSteeringMessages()
 
-	maxIter := o.config.MaxIterations
-	if maxIter <= 0 {
-		maxIter = 15
-	}
+	maxIter := o.effectiveMaxIterations()
 	iteration := 0
 
 	// Outer loop: continues when queued follow-up messages arrive
@@ -104,6 +147,10 @@ func (o *Orchestrator) runLoop(ctx context.Context, state *AgentState) ([]AgentM
 			} else {
 				firstTurn = false
 			}
+
+			// Update progress
+			o.progressTracker.UpdateStep(fmt.Sprintf("Turn %d/%d", iteration, maxIter))
+			o.progressTracker.CompleteStep()
 
 			// Process pending messages (inject before next assistant response)
 			if len(pendingMessages) > 0 {
@@ -137,7 +184,7 @@ func (o *Orchestrator) runLoop(ctx context.Context, state *AgentState) ([]AgentM
 				return resp.Content, nil
 			}
 			for attempt := 0; attempt <= maxContextOverflowRetries; attempt++ {
-				assistantMsg, err = o.streamAssistantResponse(ctx, state)
+				assistantMsg, err = o.streamAssistantResponseWithRateLimitRetry(ctx, state)
 				if err == nil {
 					break
 				}
@@ -173,6 +220,9 @@ func (o *Orchestrator) runLoop(ctx context.Context, state *AgentState) ([]AgentM
 			hasMoreToolCalls = len(toolCalls) > 0
 
 			if hasMoreToolCalls {
+				// Update progress for tool execution
+				o.progressTracker.UpdateStep(fmt.Sprintf("Executing %d tools", len(toolCalls)))
+
 				results, steering := o.executeToolCalls(ctx, toolCalls, state)
 				steeringAfterTools = len(steering) > 0
 
@@ -211,6 +261,59 @@ func (o *Orchestrator) runLoop(ctx context.Context, state *AgentState) ([]AgentM
 	}
 
 	return state.Messages, nil
+}
+
+const maxRateLimitRetries = 2 // 限流时最多额外重试次数（共 maxRateLimitRetries+1 次调用）
+
+// streamAssistantResponseWithRateLimitRetry 调用 LLM；若返回 406/429 等限流错误则按上游提示等待后重试，避免用户看到原始 406 即失败
+func (o *Orchestrator) streamAssistantResponseWithRateLimitRetry(ctx context.Context, state *AgentState) (AgentMessage, error) {
+	classifier := types.NewSimpleErrorClassifier()
+	var lastErr error
+	for attempt := 0; attempt <= maxRateLimitRetries; attempt++ {
+		// 若配置了模型请求最小间隔，则等待至满足间隔后再调用（缓解同一会话内连续请求导致 406）
+		if o.config.ModelRequestInterval > 0 {
+			elapsed := time.Since(o.lastLLMCallTime)
+			if elapsed < o.config.ModelRequestInterval {
+				wait := o.config.ModelRequestInterval - elapsed
+				logger.Debug("Model request interval: waiting before next LLM call", zap.Duration("wait", wait))
+				select {
+				case <-time.After(wait):
+				case <-ctx.Done():
+					return AgentMessage{}, ctx.Err()
+				}
+			}
+			o.lastLLMCallTime = time.Now()
+		}
+		msg, err := o.streamAssistantResponse(ctx, state)
+		if err == nil {
+			return msg, nil
+		}
+		lastErr = err
+		if classifier.ClassifyError(err) != types.FailoverReasonRateLimit {
+			return AgentMessage{}, err
+		}
+		delaySec := types.ExtractRateLimitDelay(err, 30, 60)
+		if delaySec <= 0 {
+			delaySec = 30
+		}
+		if attempt < maxRateLimitRetries {
+			logger.Info("Rate limit / 406, waiting before retry",
+				zap.Int("wait_seconds", delaySec),
+				zap.Int("attempt", attempt+1),
+				zap.Int("max_retries", maxRateLimitRetries),
+				zap.Error(err))
+			timer := time.NewTimer(time.Duration(delaySec) * time.Second)
+			select {
+			case <-timer.C:
+				// 继续重试
+			case <-ctx.Done():
+				timer.Stop()
+				return AgentMessage{}, ctx.Err()
+			}
+			timer.Stop()
+		}
+	}
+	return AgentMessage{}, lastErr
 }
 
 // streamAssistantResponse calls the LLM and streams the response
@@ -298,7 +401,8 @@ func (o *Orchestrator) streamAssistantResponse(ctx context.Context, state *Agent
 	}
 	fullMessages = append(fullMessages, providerMsgs...)
 
-	modelForRequest := strings.TrimSpace(o.config.Model)
+	// 本次运行的有效 model（子 agent 可通过 RunOptions.Model 覆盖）
+	modelForRequest := o.effectiveModel()
 	if modelForRequest == "" || strings.EqualFold(modelForRequest, "default") {
 		modelForRequest = "(provider default)"
 	}
@@ -310,7 +414,7 @@ func (o *Orchestrator) streamAssistantResponse(ctx context.Context, state *Agent
 
 	// 从配置组装 LLM 调用选项
 	chatOpts := []providers.ChatOption{}
-	if model := strings.TrimSpace(o.config.Model); model != "" && !strings.EqualFold(model, "default") {
+	if model := strings.TrimSpace(o.effectiveModel()); model != "" && !strings.EqualFold(model, "default") {
 		chatOpts = append(chatOpts, providers.WithModel(model))
 	}
 	if o.config.Temperature > 0 {
@@ -391,120 +495,182 @@ func (o *Orchestrator) streamAssistantResponse(ctx context.Context, state *Agent
 }
 
 // executeToolCalls executes tool calls with interruption support
+// Tools are executed in parallel for better performance
 func (o *Orchestrator) executeToolCalls(ctx context.Context, toolCalls []ToolCallContent, state *AgentState) ([]AgentMessage, []AgentMessage) {
-	results := make([]AgentMessage, 0, len(toolCalls))
-
 	logger.Info("=== Execute Tool Calls Start ===",
 		zap.Int("count", len(toolCalls)))
-	for _, tc := range toolCalls {
-		logger.Debug("Tool call start",
-			zap.String("tool_id", tc.ID),
-			zap.String("tool_name", tc.Name),
-			zap.Any("arguments", tc.Arguments))
 
-		// Emit tool execution start
-		o.emit(NewEvent(EventToolExecutionStart).WithToolExecution(tc.ID, tc.Name, tc.Arguments))
+	if len(toolCalls) == 0 {
+		return nil, nil
+	}
 
-		// Find tool
-		var tool Tool
-		for _, t := range state.Tools {
-			if t.Name() == tc.Name {
-				tool = t
-				break
-			}
-		}
+	// Structure to hold tool execution results with order
+	type toolExecutionResult struct {
+		index      int
+		toolCall   ToolCallContent
+		result     ToolResult
+		err        error
+		resultMsg  AgentMessage
+		skillName  string // For use_skill tracking
+	}
 
-		var result ToolResult
-		var err error
+	// Execute tools in parallel
+	var wg sync.WaitGroup
+	resultsChan := make(chan toolExecutionResult, len(toolCalls))
 
-		if tool == nil {
-			err = fmt.Errorf("tool %s not found", tc.Name)
-			result = ToolResult{
-				Content: []ContentBlock{TextContent{Text: fmt.Sprintf("Tool not found: %s", tc.Name)}},
-				Details: map[string]any{"error": err.Error()},
-			}
-			logger.Error("Tool not found",
-				zap.String("tool_name", tc.Name),
-				zap.String("tool_id", tc.ID))
-		} else {
-			state.AddPendingTool(tc.ID)
+	for i, tc := range toolCalls {
+		wg.Add(1)
+		go func(index int, tc ToolCallContent) {
+			defer wg.Done()
 
-			// Execute tool with streaming support
-			result, err = tool.Execute(ctx, tc.Arguments, func(partial ToolResult) {
-				// Emit update event
-				o.emit(NewEvent(EventToolExecutionUpdate).
-					WithToolExecution(tc.ID, tc.Name, tc.Arguments).
-					WithToolResult(&partial, false))
-			})
-
-			state.RemovePendingTool(tc.ID)
-		}
-
-		// Log tool execution result
-		if err != nil {
-			logger.Error("Tool execution failed",
+			logger.Debug("Tool call start",
 				zap.String("tool_id", tc.ID),
 				zap.String("tool_name", tc.Name),
-				zap.Any("arguments", tc.Arguments),
-				zap.Error(err))
-		} else {
-			// Extract content for logging
-			contentText := extractToolResultContent(result.Content)
-			logger.Debug("Tool execution success",
-				zap.String("tool_id", tc.ID),
-				zap.String("tool_name", tc.Name),
-				zap.Any("arguments", tc.Arguments),
-				zap.Int("result_length", len(contentText)),
-				zap.String("result_preview", truncateString(contentText, 200)))
-		}
+				zap.Any("arguments", tc.Arguments))
 
-		// Convert result to message
-		resultMsg := AgentMessage{
-			Role:      RoleToolResult,
-			Content:   result.Content,
-			Timestamp: time.Now().UnixMilli(),
-			Metadata:  map[string]any{"tool_call_id": tc.ID, "tool_name": tc.Name},
-		}
+			// Update progress tracking
+			o.progressTracker.StartTool(tc.Name, len(toolCalls))
 
-		if err != nil {
-			resultMsg.Metadata["error"] = err.Error()
-			result.Content = []ContentBlock{TextContent{Text: err.Error()}}
-		}
+			// Emit tool execution start
+			o.emit(NewEvent(EventToolExecutionStart).WithToolExecution(tc.ID, tc.Name, tc.Arguments))
 
-		results = append(results, resultMsg)
+			// Find tool
+			var tool Tool
+			for _, t := range state.Tools {
+				if t.Name() == tc.Name {
+					tool = t
+					break
+				}
+			}
 
-		// Check for use_skill and update LoadedSkills
-		if tc.Name == "use_skill" && err == nil {
-			if skillName, ok := tc.Arguments["skill_name"].(string); ok && skillName != "" {
-				// Add to LoadedSkills if not already present
-				alreadyLoaded := false
-				for _, loaded := range state.LoadedSkills {
-					if loaded == skillName {
-						alreadyLoaded = true
-						break
+			var result ToolResult
+			var err error
+			var skillName string
+
+			if tool == nil {
+				err = fmt.Errorf("tool %s not found", tc.Name)
+				result = ToolResult{
+					Content: []ContentBlock{TextContent{Text: fmt.Sprintf("Tool not found: %s", tc.Name)}},
+					Details: map[string]any{"error": err.Error()},
+				}
+				logger.Error("Tool not found",
+					zap.String("tool_name", tc.Name),
+					zap.String("tool_id", tc.ID))
+			} else {
+				state.AddPendingTool(tc.ID)
+
+				// 将 session key 添加到 context 中，供工具使用
+				toolCtx := context.WithValue(ctx, "session_key", state.SessionKey)
+
+				// Execute tool with streaming support
+				result, err = tool.Execute(toolCtx, tc.Arguments, func(partial ToolResult) {
+					// Emit update event
+					o.emit(NewEvent(EventToolExecutionUpdate).
+						WithToolExecution(tc.ID, tc.Name, tc.Arguments).
+						WithToolResult(&partial, false))
+				})
+
+				state.RemovePendingTool(tc.ID)
+
+				// Check for use_skill
+				if tc.Name == "use_skill" && err == nil {
+					if sn, ok := tc.Arguments["skill_name"].(string); ok && sn != "" {
+						skillName = sn
 					}
 				}
-				if !alreadyLoaded {
-					state.LoadedSkills = append(state.LoadedSkills, skillName)
-					logger.Info("=== Skill Loaded ===",
-						zap.String("skill_name", skillName),
-						zap.Int("total_loaded", len(state.LoadedSkills)),
-						zap.Strings("loaded_skills", state.LoadedSkills))
+			}
+
+			// Log tool execution result
+			if err != nil {
+				logger.Error("Tool execution failed",
+					zap.String("tool_id", tc.ID),
+					zap.String("tool_name", tc.Name),
+					zap.Any("arguments", tc.Arguments),
+					zap.Error(err))
+			} else {
+				// Extract content for logging
+				contentText := extractToolResultContent(result.Content)
+				logger.Debug("Tool execution success",
+					zap.String("tool_id", tc.ID),
+					zap.String("tool_name", tc.Name),
+					zap.Any("arguments", tc.Arguments),
+					zap.Int("result_length", len(contentText)),
+					zap.String("result_preview", truncateString(contentText, 200)))
+			}
+
+			// Convert result to message
+			resultMsg := AgentMessage{
+				Role:      RoleToolResult,
+				Content:   result.Content,
+				Timestamp: time.Now().UnixMilli(),
+				Metadata:  map[string]any{"tool_call_id": tc.ID, "tool_name": tc.Name},
+			}
+
+			if err != nil {
+				resultMsg.Metadata["error"] = err.Error()
+				result.Content = []ContentBlock{TextContent{Text: err.Error()}}
+			}
+
+			// Update progress tracking
+			o.progressTracker.CompleteTool(tc.Name)
+
+			// Emit tool execution end
+			event := NewEvent(EventToolExecutionEnd).
+				WithToolExecution(tc.ID, tc.Name, tc.Arguments).
+				WithToolResult(&result, err != nil)
+			o.emit(event)
+
+			// Send result to channel
+			resultsChan <- toolExecutionResult{
+				index:     index,
+				toolCall:  tc,
+				result:    result,
+				err:       err,
+				resultMsg: resultMsg,
+				skillName: skillName,
+			}
+		}(i, tc)
+	}
+
+	// Wait for all tools to complete
+	wg.Wait()
+	close(resultsChan)
+
+	// Collect results in order
+	resultsMap := make(map[int]toolExecutionResult)
+	for res := range resultsChan {
+		resultsMap[res.index] = res
+	}
+
+	// Build ordered results
+	results := make([]AgentMessage, 0, len(toolCalls))
+	for i := 0; i < len(toolCalls); i++ {
+		res := resultsMap[i]
+		results = append(results, res.resultMsg)
+
+		// Update LoadedSkills for use_skill
+		if res.skillName != "" {
+			alreadyLoaded := false
+			for _, loaded := range state.LoadedSkills {
+				if loaded == res.skillName {
+					alreadyLoaded = true
+					break
 				}
 			}
+			if !alreadyLoaded {
+				state.LoadedSkills = append(state.LoadedSkills, res.skillName)
+				logger.Info("=== Skill Loaded ===",
+					zap.String("skill_name", res.skillName),
+					zap.Int("total_loaded", len(state.LoadedSkills)),
+					zap.Strings("loaded_skills", state.LoadedSkills))
+			}
 		}
+	}
 
-		// Emit tool execution end
-		event := NewEvent(EventToolExecutionEnd).
-			WithToolExecution(tc.ID, tc.Name, tc.Arguments).
-			WithToolResult(&result, err != nil)
-		o.emit(event)
-
-		// Check for steering messages (interruption)
-		steering := o.fetchSteeringMessages()
-		if len(steering) > 0 {
-			return results, steering
-		}
+	// Check for steering messages (interruption) after all tools complete
+	steering := o.fetchSteeringMessages()
+	if len(steering) > 0 {
+		return results, steering
 	}
 
 	logger.Info("=== Execute Tool Calls End ===",
@@ -563,6 +729,16 @@ func (o *Orchestrator) Stop() {
 // Subscribe returns the event channel
 func (o *Orchestrator) Subscribe() <-chan *Event {
 	return o.eventChan
+}
+
+// GetProgressTracker returns the progress tracker
+func (o *Orchestrator) GetProgressTracker() *ProgressTracker {
+	return o.progressTracker
+}
+
+// SubscribeProgress subscribes to progress updates
+func (o *Orchestrator) SubscribeProgress() <-chan *ProgressUpdate {
+	return o.progressTracker.Subscribe()
 }
 
 // Helper functions

@@ -33,13 +33,14 @@ func (m *InboundMessage) SessionKey() string {
 // OutboundMessage 出站消息
 type OutboundMessage struct {
 	ID        string                 `json:"id"`
-	Channel   string                 `json:"channel"`   // telegram, whatsapp, feishu, cli
-	ChatID    string                 `json:"chat_id"`   // 聊天ID
-	Content   string                 `json:"content"`   // 消息内容
+	Channel   string                 `json:"channel"`    // telegram, whatsapp, feishu, cli
+	ChatID    string                 `json:"chat_id"`    // 聊天ID
+	Content   string                 `json:"content"`    // 消息内容
 	Media     []Media                `json:"media"`     // 媒体文件
-	ReplyTo   string                 `json:"reply_to"`  // 回复的消息ID
-	Metadata  map[string]interface{} `json:"metadata"`  // 元数据
-	IsStream  bool                   `json:"is_stream"` // 是否为流式增量内容
+	ReplyTo   string                 `json:"reply_to"`    // 回复的消息ID
+	Metadata  map[string]interface{} `json:"metadata"`   // 元数据
+	IsStream  bool                   `json:"is_stream"`  // 是否为流式增量内容
+	ChatState string                 `json:"chat_state"` // 可选：chat 事件 state，如 "error"、"aborted"；空则按 IsStream 推导 delta/final
 	Timestamp time.Time              `json:"timestamp"`
 }
 
@@ -54,4 +55,24 @@ type SystemMessage struct {
 // IsSystemMessage 判断是否为系统消息
 func (m *InboundMessage) IsSystemMessage() bool {
 	return m.Channel == "system"
+}
+
+// AgentEventStream 与 OpenClaw 对齐：lifecycle | tool | assistant | error
+type AgentEventStream string
+
+const (
+	AgentStreamLifecycle AgentEventStream = "lifecycle"
+	AgentStreamTool      AgentEventStream = "tool"
+	AgentStreamAssistant AgentEventStream = "assistant"
+	AgentStreamError     AgentEventStream = "error"
+)
+
+// AgentEventPayload 与 OpenClaw infra/agent-events.ts 一致，供 Control UI 显示进度与工具执行
+type AgentEventPayload struct {
+	RunId      string                 `json:"runId"`
+	Seq        int                    `json:"seq"`
+	Stream     AgentEventStream       `json:"stream"`
+	Ts         int64                  `json:"ts"`
+	Data       map[string]interface{} `json:"data"`
+	SessionKey string                 `json:"sessionKey,omitempty"`
 }

@@ -56,7 +56,19 @@ type AgentDefaults struct {
 	MaxTokens         int              `mapstructure:"max_tokens" json:"max_tokens"`
 	ContextTokens     int              `mapstructure:"context_tokens" json:"context_tokens"`           // 模型上下文窗口 token 数，0 表示用 provider 默认
 	LimitHistoryTurns int              `mapstructure:"limit_history_turns" json:"limit_history_turns"` // 发给 LLM 时最多保留的 user 轮次，0 表示不限制（与 OpenClaw 对齐）
+	RunTimeoutSeconds         int          `mapstructure:"run_timeout_seconds" json:"run_timeout_seconds"`                   // 单次 Run 最大耗时（秒），0 表示不限制；超时后 ctx 取消，避免模型 API 断开时无限卡住
+	ModelRequestIntervalSeconds int       `mapstructure:"model_request_interval_seconds" json:"model_request_interval_seconds"` // 同一会话内两次调用模型的最小间隔（秒），0 表示不限制；用于缓解 406/限流（OpenClaw 无此配置，为 goclaw 扩展）
+	Retry             *RetryConfig     `mapstructure:"retry" json:"retry"`                             // 重试配置
 	Subagents         *SubagentsConfig `mapstructure:"subagents" json:"subagents"`
+}
+
+// RetryConfig 重试配置
+type RetryConfig struct {
+	Enabled       bool          `mapstructure:"enabled" json:"enabled"`
+	MaxRetries    int           `mapstructure:"max_retries" json:"max_retries"`
+	InitialDelay  time.Duration `mapstructure:"initial_delay" json:"initial_delay"`
+	MaxDelay      time.Duration `mapstructure:"max_delay" json:"max_delay"`
+	BackoffFactor float64       `mapstructure:"backoff_factor" json:"backoff_factor"`
 }
 
 // SubagentsConfig 分身配置
@@ -227,12 +239,14 @@ type InfoflowChannelConfig struct {
 
 // ProvidersConfig LLM 提供商配置
 type ProvidersConfig struct {
-	OpenRouter OpenRouterProviderConfig `mapstructure:"openrouter" json:"openrouter"`
-	OpenAI     OpenAIProviderConfig     `mapstructure:"openai" json:"openai"`
-	Anthropic  AnthropicProviderConfig  `mapstructure:"anthropic" json:"anthropic"`
-	Moonshot   MoonshotProviderConfig   `mapstructure:"moonshot" json:"moonshot"` // Kimi（月之暗面）OpenAI 兼容 API，与 OpenClaw 对齐
-	Profiles   []ProviderProfileConfig  `mapstructure:"profiles" json:"profiles"`
-	Failover   FailoverConfig           `mapstructure:"failover" json:"failover"`
+	OpenRouter         OpenRouterProviderConfig `mapstructure:"openrouter" json:"openrouter"`
+	OpenAI             OpenAIProviderConfig     `mapstructure:"openai" json:"openai"`
+	Anthropic          AnthropicProviderConfig  `mapstructure:"anthropic" json:"anthropic"`
+	Moonshot           MoonshotProviderConfig   `mapstructure:"moonshot" json:"moonshot"`   // Kimi（月之暗面）OpenAI 兼容 API，与 OpenClaw 对齐
+	Router9            Router9ProviderConfig   `mapstructure:"9router" json:"9router"`       // 9router 本地代理，OpenAI 兼容 API
+	Profiles           []ProviderProfileConfig  `mapstructure:"profiles" json:"profiles"`
+	Failover           FailoverConfig           `mapstructure:"failover" json:"failover"`
+	MaxConcurrentCalls int                      `mapstructure:"max_concurrent_calls" json:"max_concurrent_calls"` // 全局并发 LLM 调用上限，0=不限制，1=串行（多 agent 时建议 1 防卡死）
 }
 
 // ProviderProfileConfig 提供商配置
@@ -293,6 +307,16 @@ type MoonshotProviderConfig struct {
 	Timeout   int                    `mapstructure:"timeout" json:"timeout"`
 	Streaming *bool                  `mapstructure:"streaming" json:"streaming"` // 是否启用流式输出，默认 true
 	ExtraBody map[string]interface{} `mapstructure:"extra_body" json:"extra_body"` // 请求体扩展，如关闭 thinking: {"thinking":{"type":"disabled"}}
+}
+
+// Router9ProviderConfig 9router 本地代理配置（OpenAI 兼容 API）
+type Router9ProviderConfig struct {
+	APIKey       string                 `mapstructure:"api_key" json:"api_key"`               // 通常为 "sk_9router"
+	BaseURL      string                 `mapstructure:"base_url" json:"base_url"`              // 默认 "http://localhost:20128/v1"
+	Timeout      int                    `mapstructure:"timeout" json:"timeout"`
+	Streaming    *bool                  `mapstructure:"streaming" json:"streaming"`           // 是否启用流式输出，默认 true
+	ToolsEnabled *bool                  `mapstructure:"tools_enabled" json:"tools_enabled"`     // 是否向 9router 传 tools，默认 true；若 406 可试 false 排查
+	ExtraBody    map[string]interface{} `mapstructure:"extra_body" json:"extra_body"`
 }
 
 // GatewayConfig 网关配置

@@ -1,23 +1,27 @@
 {
   "workspace": {
-    "path": "C:\\Users\\Administrator\\.goclaw\\workspace"
+    "path": ".goclaw\\workspace"
   },
   "agents": {
     "defaults": {
-      "model": "kimi-k2.5",
+      "model": "openrouter:anthropic/claude-sonnet-4",
       "max_iterations": 15,
       "temperature": 1,
       "max_tokens": 8192,
-      "context_tokens": 0,
+      "context_tokens": 200000,
       "limit_history_turns": 0,
+      "run_timeout_seconds": 300,
+      "model_request_interval_seconds": 0,
+      "retry": null,
       "subagents": {
         "max_concurrent": 8,
         "archive_after_minutes": 60,
-        "model": "kimi-k2.5",
+        "model": "",
+        "thinking": "",
         "timeout_seconds": 300
       }
     },
-    "list": null
+    "list": []
   },
   "channels": {
     "telegram": {
@@ -33,11 +37,11 @@
       "accounts": null
     },
     "feishu": {
-      "enabled": true,
-      "app_id": "cli_a90615c106e1dbb5",
-      "app_secret": "jb9R7Qnplmrap8dEgg1vzeWMJ7VAwlwq",
+      "enabled": false,
+      "app_id": "",
+      "app_secret": "",
       "encrypt_key": "",
-      "verification_token": "pershow",
+      "verification_token": "",
       "event_mode": "long_connection",
       "webhook_port": 8765,
       "allowed_ids": []
@@ -64,7 +68,7 @@
       "token": "",
       "encoding_aes_key": "",
       "webhook_port": 0,
-      "allowed_ids": null,
+      "allowed_ids": [],
       "accounts": null
     },
     "infoflow": {
@@ -74,39 +78,19 @@
       "aes_key": "",
       "webhook_port": 18766,
       "allowed_ids": [],
-      "accounts": {
-        "bot1": {
-          "enabled": false,
-          "name": "Infoflow Bot 1",
-          "token": "",
-          "app_id": "",
-          "app_secret": "",
-          "corp_id": "",
-          "agent_id": "",
-          "client_id": "",
-          "client_secret": "",
-          "bridge_url": "",
-          "webhook_url": "",
-          "aes_key": "",
-          "encrypt_key": "",
-          "verification_token": "",
-          "event_mode": "",
-          "webhook_port": 18766,
-          "allowed_ids": []
-        }
-      }
+      "accounts": null
     }
   },
   "providers": {
     "openrouter": {
       "api_key": "",
-      "base_url": "",
+      "base_url": "https://openrouter.ai/api/v1",
       "timeout": 600,
       "max_retries": 3
     },
     "openai": {
-      "api_key": "YOUR_OPENAI_API_KEY_HERE",
-      "base_url": "https://api.deepseek.com",
+      "api_key": "",
+      "base_url": "",
       "timeout": 600,
       "extra_body": null
     },
@@ -116,18 +100,19 @@
       "timeout": 600
     },
     "moonshot": {
-      "api_key": "YOUR_OPENAI_API_KEY_HERE",
+      "api_key": "",
       "base_url": "https://api.moonshot.cn/v1",
+      "timeout": 600,
       "streaming": true,
-      "extra_body": {
-        "thinking": {
-          "type": "disabled"
-        },
-        "reasoning": {
-          "enabled": false
-        }
-      },
-      "timeout": 600
+      "extra_body": null
+    },
+    "9router": {
+      "api_key": "sk_9router",
+      "base_url": "http://127.0.0.1:20128/v1",
+      "timeout": 600,
+      "streaming": true,
+      "tools_enabled": true,
+      "extra_body": null
     },
     "profiles": null,
     "failover": {
@@ -138,7 +123,8 @@
         "failure_threshold": 0,
         "timeout": 0
       }
-    }
+    },
+    "max_concurrent_calls": 0
   },
   "gateway": {
     "host": "localhost",
@@ -160,7 +146,7 @@
   "session": {
     "scope": "per-sender",
     "store": "",
-    "main_key": "",
+    "main_key": "main",
     "reset": {
       "mode": "daily",
       "at_hour": 4,
@@ -198,14 +184,14 @@
       "timeout": 10
     },
     "browser": {
-      "enabled": true,
+      "enabled": false,
       "headless": true,
       "timeout": 30
     }
   },
   "approvals": {
     "behavior": "",
-    "allowlist": null
+    "allowlist": []
   },
   "memory": {
     "backend": "builtin",

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/smallnest/goclaw/providers"
@@ -99,6 +100,7 @@ type AgentState struct {
 	Messages      []AgentMessage
 	IsStreaming   bool
 	PendingTools  map[string]bool
+	pendingMu     sync.Mutex // 保护 PendingTools，executeToolCalls 多 goroutine 并发写
 	Error         error
 
 	// Queues for message injection (inspired by pi-mono)
@@ -163,6 +165,9 @@ type LoopConfig struct {
 	ReserveTokens       int // 保留给系统提示与回复的 token 数
 	MaxHistoryTurns     int // 发送给 LLM 时最多保留的 user 轮次数，0 表示不限制
 
+	// 同一会话内两次 LLM 调用的最小间隔，用于缓解 406/限流；0 表示不限制
+	ModelRequestInterval time.Duration
+
 	// Hooks for message transformation
 	ConvertToLLM     func([]AgentMessage) ([]providers.Message, error)
 	TransformContext func([]AgentMessage) ([]AgentMessage, error)
@@ -213,24 +218,33 @@ func (s *AgentState) GetLastMessage() *AgentMessage {
 
 // HasPendingToolCalls checks if there are pending tool executions
 func (s *AgentState) HasPendingToolCalls() bool {
-	return len(s.PendingTools) > 0
+	s.pendingMu.Lock()
+	n := len(s.PendingTools)
+	s.pendingMu.Unlock()
+	return n > 0
 }
 
-// AddPendingTool adds a tool to the pending set
+// AddPendingTool adds a tool to the pending set（多 goroutine 安全）
 func (s *AgentState) AddPendingTool(toolID string) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
 	if s.PendingTools == nil {
 		s.PendingTools = make(map[string]bool)
 	}
 	s.PendingTools[toolID] = true
 }
 
-// RemovePendingTool removes a tool from the pending set
+// RemovePendingTool removes a tool from the pending set（多 goroutine 安全）
 func (s *AgentState) RemovePendingTool(toolID string) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
 	delete(s.PendingTools, toolID)
 }
 
 // ClearPendingTools clears all pending tools
 func (s *AgentState) ClearPendingTools() {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
 	s.PendingTools = make(map[string]bool)
 }
 
@@ -274,10 +288,12 @@ func (s *AgentState) Clone() *AgentState {
 	followUp := make([]AgentMessage, len(s.FollowUpQueue))
 	copy(followUp, s.FollowUpQueue)
 
+	s.pendingMu.Lock()
 	pendingTools := make(map[string]bool, len(s.PendingTools))
 	for k, v := range s.PendingTools {
 		pendingTools[k] = v
 	}
+	s.pendingMu.Unlock()
 
 	loadedSkills := make([]string, len(s.LoadedSkills))
 	copy(loadedSkills, s.LoadedSkills)

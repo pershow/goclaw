@@ -17,7 +17,8 @@ import (
 // Agent represents the main AI agent
 // New implementation inspired by pi-mono architecture
 type Agent struct {
-	id           string // Agent ID，与 session key 中的 agentId 对应
+	id           string       // Agent ID，与 session key 中的 agentId 对应
+	loopConfig   *LoopConfig  // 用于每次 Run 创建独立 Orchestrator，避免多会话事件串流
 	orchestrator *Orchestrator
 	bus          *bus.MessageBus
 	provider     providers.Provider
@@ -52,6 +53,9 @@ type NewAgentConfig struct {
 	ContextWindowTokens int // 来自配置 agents.defaults.context_tokens 或 profile
 	ReserveTokens       int // 保留 token 数，默认 4096
 	MaxHistoryTurns     int // 最多保留的 user 轮次，0 表示不限制
+
+	// 同一会话内两次调用模型的最小间隔（秒），0 表示不限制；用于缓解 406/限流
+	ModelRequestIntervalSeconds int
 }
 
 // NewAgent creates a new agent
@@ -85,20 +89,21 @@ func NewAgent(cfg *NewAgentConfig) (*Agent, error) {
 	}
 
 	loopConfig := &LoopConfig{
-		Model:                state.Model,
-		Provider:             cfg.Provider,
-		SessionMgr:           cfg.SessionMgr,
-		MaxIterations:        cfg.MaxIteration,
-		Temperature:          cfg.Temperature,
-		MaxTokens:            cfg.MaxTokens,
-		ContextWindowTokens:  cfg.ContextWindowTokens,
-		ReserveTokens:        cfg.ReserveTokens,
-		MaxHistoryTurns:      cfg.MaxHistoryTurns,
-		ConvertToLLM:         defaultConvertToLLM,
-		TransformContext:     nil,
-		Skills:               skills,
-		LoadedSkills:         state.LoadedSkills,
-		ContextBuilder:       cfg.Context,
+		Model:                   state.Model,
+		Provider:                cfg.Provider,
+		SessionMgr:              cfg.SessionMgr,
+		MaxIterations:           cfg.MaxIteration,
+		Temperature:             cfg.Temperature,
+		MaxTokens:               cfg.MaxTokens,
+		ContextWindowTokens:     cfg.ContextWindowTokens,
+		ReserveTokens:            cfg.ReserveTokens,
+		MaxHistoryTurns:         cfg.MaxHistoryTurns,
+		ModelRequestInterval:     time.Duration(cfg.ModelRequestIntervalSeconds) * time.Second,
+		ConvertToLLM:            defaultConvertToLLM,
+		TransformContext:        nil,
+		Skills:                  skills,
+		LoadedSkills:            state.LoadedSkills,
+		ContextBuilder:          cfg.Context,
 		GetSteeringMessages:  func() ([]AgentMessage, error) {
 			state := state // Capture state
 			return state.DequeueSteeringMessages(), nil
@@ -119,6 +124,7 @@ func NewAgent(cfg *NewAgentConfig) (*Agent, error) {
 
 	return &Agent{
 		id:           agentID,
+		loopConfig:   loopConfig,
 		orchestrator: orchestrator,
 		bus:          cfg.Bus,
 		provider:     cfg.Provider,
@@ -183,7 +189,7 @@ func (a *Agent) Prompt(ctx context.Context, content string) error {
 	}
 
 	// Run orchestrator
-	finalMessages, err := a.orchestrator.Run(ctx, []AgentMessage{msg})
+	finalMessages, err := a.orchestrator.Run(ctx, []AgentMessage{msg}, nil)
 	if err != nil {
 		logger.Error("Agent execution failed", zap.Error(err))
 		return err
@@ -297,7 +303,7 @@ func (a *Agent) handleInboundMessage(ctx context.Context, msg *bus.InboundMessag
 	}
 
 	// Run agent
-	finalMessages, err := a.orchestrator.Run(ctx, []AgentMessage{agentMsg})
+	finalMessages, err := a.orchestrator.Run(ctx, []AgentMessage{agentMsg}, nil)
 	if err != nil {
 		logger.Error("Agent execution failed", zap.Error(err))
 
@@ -510,9 +516,19 @@ func (a *Agent) GetCurrentChatID() string {
 	return "main"
 }
 
-// GetOrchestrator 获取 orchestrator（供 AgentManager 使用）
+// GetOrchestrator 获取 orchestrator（供单会话或兼容路径使用）
 func (a *Agent) GetOrchestrator() *Orchestrator {
 	return a.orchestrator
+}
+
+// CreateOrchestratorForRun 为本次 Run 创建独立的 Orchestrator，避免多 agent/多会话共用一个 eventChan 导致流式事件串台。
+// 调用方负责在 Run 结束后不再使用返回的 orchestrator（无需 Close，由 GC 回收）。
+func (a *Agent) CreateOrchestratorForRun(sessionKey string) *Orchestrator {
+	a.mu.RLock()
+	runState := a.state.Clone()
+	a.mu.RUnlock()
+	runState.SessionKey = sessionKey
+	return NewOrchestrator(a.loopConfig, runState)
 }
 
 // Helper functions
